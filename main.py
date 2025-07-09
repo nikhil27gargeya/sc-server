@@ -66,12 +66,12 @@ def exchange():
 @app.route('/vehicle')
 def vehicle():
     try:
-        access_token = session.get('access_token')
+        access_token_data = session.get('access_token')
         
-        print(f"Session access_token: {access_token}")
+        print(f"Session access_token: {access_token_data}")
         print(f"Session keys: {list(session.keys())}")
         
-        if not access_token:
+        if not access_token_data:
             content = '''
             <div class="error">
                 <h3>No Access Token Found</h3>
@@ -80,6 +80,24 @@ def vehicle():
             </div>
             '''
             return render_template('base.html', content=content)
+        
+        # Extract the access token string from the token object
+        if isinstance(access_token_data, dict):
+            access_token = access_token_data.get('access_token')
+        else:
+            access_token = access_token_data
+            
+        if not access_token:
+            content = '''
+            <div class="error">
+                <h3>Invalid Access Token</h3>
+                <p>Please authenticate your vehicle first.</p>
+                <a href="/login" class="btn">Connect Your Vehicle</a>
+            </div>
+            '''
+            return render_template('base.html', content=content)
+        
+        print(f"Using access token: {access_token}")
         
         print("Getting vehicle IDs...")
         vehicle_ids = smartcar.get_vehicle_ids(access_token)
@@ -98,13 +116,29 @@ def vehicle():
         info = vehicle.info()
         print(f"Vehicle info: {info}")
         
-        print("Getting vehicle location...")
-        location = vehicle.location()
-        print(f"Vehicle location: {location}")
+        try:
+            print("Getting vehicle location...")
+            location = vehicle.location()
+            print(f"Location response: {location}")
+            location_info = f"<p><strong>Location:</strong> {location.get('data', {}).get('latitude', 'N/A')}, {location.get('data', {}).get('longitude', 'N/A')}</p>"
+        except smartcar.exceptions.RateLimitingException as e:
+            print(f"Rate limiting error: {str(e)}")
+            location_info = f"<p><strong>Location:</strong> Rate limited - please try again later</p>"
+        except Exception as e:
+            print(f"Error getting location: {str(e)}")
+            location_info = "<p><strong>Location:</strong> Error retrieving location</p>"
         
-        print("Getting vehicle odometer...")
-        odometer = vehicle.odometer()
-        print(f"Vehicle odometer: {odometer}")
+        try:
+            print("Getting vehicle odometer...")
+            odometer = vehicle.odometer()
+            print(f"Odometer response: {odometer}")
+            odometer_info = f"<p><strong>Odometer:</strong> {odometer.get('data', {}).get('distance', 'N/A')} km</p>"
+        except smartcar.exceptions.RateLimitingException as e:
+            print(f"Rate limiting error: {str(e)}")
+            odometer_info = f"<p><strong>Odometer:</strong> Rate limited - please try again later</p>"
+        except Exception as e:
+            print(f"Error getting odometer: {str(e)}")
+            odometer_info = "<p><strong>Odometer:</strong> Error retrieving odometer</p>"
         
         content = f'''
         <h2>Vehicle Information</h2>
@@ -118,13 +152,12 @@ def vehicle():
         
         <div class="info">
             <h3>Location</h3>
-            <p><strong>Latitude:</strong> {location['data']['latitude']}</p>
-            <p><strong>Longitude:</strong> {location['data']['longitude']}</p>
+            {location_info}
         </div>
         
         <div class="info">
             <h3>Odometer</h3>
-            <p><strong>Distance:</strong> {odometer['data']['distance']} {odometer['data']['unit']}</p>
+            {odometer_info}
         </div>
         
         <a href="/" class="btn">Back to Home</a>
@@ -132,40 +165,49 @@ def vehicle():
         
         return render_template('base.html', content=content)
         
-    except smartcar.exceptions.RateLimitError as e:
-        print(f"Rate limit error: {str(e)}")
+    except smartcar.exceptions.RateLimitingException as e:
+        print(f"Rate limiting error: {str(e)}")
         content = f'''
         <div class="error">
-            <h3>Rate Limit Reached</h3>
-            <p>You've made too many requests to the Smartcar API. Please wait a few minutes before trying again.</p>
+            <h3>Rate Limiting Error</h3>
+            <p>You have reached the throttling rate limit for this vehicle. Please try again later.</p>
             <p><strong>Error:</strong> {str(e)}</p>
             <a href="/vehicle" class="btn">Try Again</a>
-            <a href="/" class="btn">Back to Home</a>
         </div>
         '''
         return render_template('base.html', content=content)
-        
-    except smartcar.exceptions.AuthenticationError as e:
+    except smartcar.exceptions.AuthenticationException as e:
         print(f"Authentication error: {str(e)}")
         content = f'''
         <div class="error">
             <h3>Authentication Error</h3>
-            <p>Your access token has expired or is invalid. Please reconnect your vehicle.</p>
+            <p>There was an authentication error. Please reconnect your vehicle.</p>
             <p><strong>Error:</strong> {str(e)}</p>
-            <a href="/login" class="btn">Reconnect Your Vehicle</a>
+            <a href="/login" class="btn">Reconnect Vehicle</a>
         </div>
         '''
         return render_template('base.html', content=content)
-        
-    except Exception as e:
-        print(f"Unexpected error in vehicle route: {str(e)}")
-        import traceback
-        print(f"Traceback: {traceback.format_exc()}")
+    except smartcar.exceptions.PermissionException as e:
+        print(f"Permission error: {str(e)}")
         content = f'''
         <div class="error">
-            <h3>Error Retrieving Vehicle Information</h3>
-            <p>Error: {str(e)}</p>
-            <a href="/login" class="btn">Reconnect Your Vehicle</a>
+            <h3>Permission Error</h3>
+            <p>You don't have permission to access this vehicle data.</p>
+            <p><strong>Error:</strong> {str(e)}</p>
+            <a href="/login" class="btn">Reconnect Vehicle</a>
+        </div>
+        '''
+        return render_template('base.html', content=content)
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        content = f'''
+        <div class="error">
+            <h3>Unexpected Error</h3>
+            <p>An unexpected error occurred while retrieving vehicle information.</p>
+            <p><strong>Error:</strong> {str(e)}</p>
+            <a href="/vehicle" class="btn">Try Again</a>
         </div>
         '''
         return render_template('base.html', content=content)
