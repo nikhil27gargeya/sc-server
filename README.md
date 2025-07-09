@@ -1,1 +1,3 @@
-# sc-server
+# Flask server
+
+Flask Smartcar SDK
