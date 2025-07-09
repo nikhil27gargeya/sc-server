@@ -65,34 +65,46 @@ def exchange():
 
 @app.route('/vehicle')
 def vehicle():
-    access_token = session.get('access_token')
-    
-    print(f"Session access_token: {access_token}")
-    print(f"Session keys: {list(session.keys())}")
-    
-    if not access_token:
-        content = '''
-        <div class="error">
-            <h3>No Access Token Found</h3>
-            <p>Please authenticate your vehicle first.</p>
-            <a href="/login" class="btn">Connect Your Vehicle</a>
-        </div>
-        '''
-        return render_template('base.html', content=content)
-    
     try:
+        access_token = session.get('access_token')
+        
+        print(f"Session access_token: {access_token}")
+        print(f"Session keys: {list(session.keys())}")
+        
+        if not access_token:
+            content = '''
+            <div class="error">
+                <h3>No Access Token Found</h3>
+                <p>Please authenticate your vehicle first.</p>
+                <a href="/login" class="btn">Connect Your Vehicle</a>
+            </div>
+            '''
+            return render_template('base.html', content=content)
+        
+        print("Getting vehicle IDs...")
         vehicle_ids = smartcar.get_vehicle_ids(access_token)
+        print(f"Vehicle IDs response: {vehicle_ids}")
         
         if not vehicle_ids['vehicles']:
             content = '<div class="error">No vehicles found for this user</div>'
             return render_template('base.html', content=content)
         
         vehicle_id = vehicle_ids['vehicles'][0]
+        print(f"Using vehicle ID: {vehicle_id}")
+        
         vehicle = smartcar.Vehicle(vehicle_id, access_token)
         
+        print("Getting vehicle info...")
         info = vehicle.info()
+        print(f"Vehicle info: {info}")
+        
+        print("Getting vehicle location...")
         location = vehicle.location()
+        print(f"Vehicle location: {location}")
+        
+        print("Getting vehicle odometer...")
         odometer = vehicle.odometer()
+        print(f"Vehicle odometer: {odometer}")
         
         content = f'''
         <h2>Vehicle Information</h2>
@@ -121,6 +133,7 @@ def vehicle():
         return render_template('base.html', content=content)
         
     except smartcar.exceptions.RateLimitError as e:
+        print(f"Rate limit error: {str(e)}")
         content = f'''
         <div class="error">
             <h3>Rate Limit Reached</h3>
@@ -133,6 +146,7 @@ def vehicle():
         return render_template('base.html', content=content)
         
     except smartcar.exceptions.AuthenticationError as e:
+        print(f"Authentication error: {str(e)}")
         content = f'''
         <div class="error">
             <h3>Authentication Error</h3>
@@ -144,6 +158,9 @@ def vehicle():
         return render_template('base.html', content=content)
         
     except Exception as e:
+        print(f"Unexpected error in vehicle route: {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
         content = f'''
         <div class="error">
             <h3>Error Retrieving Vehicle Information</h3>
