@@ -120,29 +120,50 @@ def vehicle():
         info = vehicle.info()
         print(f"Vehicle info: {info}")
         
-        try:
-            print("Getting vehicle location...")
-            location = vehicle.location()
-            print(f"Location response: {location}")
-            location_info = f"<p><strong>Location:</strong> {location.get('data', {}).get('latitude', 'N/A')}, {location.get('data', {}).get('longitude', 'N/A')}</p>"
-        except smartcar.exceptions.RateLimitingException as e:
-            print(f"Rate limiting error: {str(e)}")
-            location_info = f"<p><strong>Location:</strong> Rate limited - please try again later</p>"
-        except Exception as e:
-            print(f"Error getting location: {str(e)}")
-            location_info = "<p><strong>Location:</strong> Error retrieving location</p>"
+        location_from_webhook = None
+        for entry in reversed(webhook_data_store):
+            if entry.get('vehicle_id') == vehicle_id and entry.get('event_type') == 'Location.PreciseLocation':
+                location_from_webhook = entry.get('data', {})
+                break
         
-        try:
-            print("Getting vehicle odometer...")
-            odometer = vehicle.odometer()
-            print(f"Odometer response: {odometer}")
-            odometer_info = f"<p><strong>Odometer:</strong> {odometer.get('data', {}).get('distance', 'N/A')} km</p>"
-        except smartcar.exceptions.RateLimitingException as e:
-            print(f"Rate limiting error: {str(e)}")
-            odometer_info = f"<p><strong>Odometer:</strong> Rate limited - please try again later</p>"
-        except Exception as e:
-            print(f"Error getting odometer: {str(e)}")
-            odometer_info = "<p><strong>Odometer:</strong> Error retrieving odometer</p>"
+        if location_from_webhook:
+            lat = location_from_webhook.get('latitude', 'N/A')
+            lng = location_from_webhook.get('longitude', 'N/A')
+            location_info = f"<p><strong>Location:</strong> {lat}, {lng} (from webhook)</p>"
+        else:
+            try:
+                print("Getting vehicle location...")
+                location = vehicle.location()
+                print(f"Location response: {location}")
+                location_info = f"<p><strong>Location:</strong> {location.get('data', {}).get('latitude', 'N/A')}, {location.get('data', {}).get('longitude', 'N/A')} (from API)</p>"
+            except smartcar.exceptions.RateLimitingException as e:
+                print(f"Rate limiting error: {str(e)}")
+                location_info = f"<p><strong>Location:</strong> Rate limited - please try again later</p>"
+            except Exception as e:
+                print(f"Error getting location: {str(e)}")
+                location_info = "<p><strong>Location:</strong> Error retrieving location</p>"
+        
+        odometer_from_webhook = None
+        for entry in reversed(webhook_data_store):
+            if entry.get('vehicle_id') == vehicle_id and entry.get('event_type') == 'Odometer.TraveledDistance':
+                odometer_from_webhook = entry.get('data', {})
+                break
+        
+        if odometer_from_webhook:
+            distance = odometer_from_webhook.get('distance', 'N/A')
+            odometer_info = f"<p><strong>Odometer:</strong> {distance} km (from webhook)</p>"
+        else:
+            try:
+                print("Getting vehicle odometer...")
+                odometer = vehicle.odometer()
+                print(f"Odometer response: {odometer}")
+                odometer_info = f"<p><strong>Odometer:</strong> {odometer.get('data', {}).get('distance', 'N/A')} km (from API)</p>"
+            except smartcar.exceptions.RateLimitingException as e:
+                print(f"Rate limiting error: {str(e)}")
+                odometer_info = f"<p><strong>Odometer:</strong> Rate limited - please try again later</p>"
+            except Exception as e:
+                print(f"Error getting odometer: {str(e)}")
+                odometer_info = "<p><strong>Odometer:</strong> Error retrieving odometer</p>"
         
         content = f'''
         <h2>Vehicle Information</h2>
