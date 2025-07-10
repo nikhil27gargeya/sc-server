@@ -5,6 +5,10 @@ from flask import Flask, request, redirect, session, render_template
 from dotenv import load_dotenv
 import hmac
 import hashlib
+from datetime import datetime
+
+# Global variable to store webhook data
+webhook_data_store = []
 
 load_dotenv()
 
@@ -214,19 +218,39 @@ def vehicle():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Handle incoming webhooks from Smartcar"""
     try:
+        # Get the webhook data
         data = request.get_json()
         
         print(f"Received webhook data: {data}")
         
+        # Check if this is a verification request
         if data.get('eventName') == 'verify':
             return handle_verification(data)
         
+        # Store the webhook data with timestamp
+        webhook_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'vehicle_id': data.get('vehicleId'),
+            'event_type': data.get('eventType'),
+            'data': data.get('data', {}),
+            'raw_data': data
+        }
+        
+        # Add to global store (keep last 100 entries)
+        global webhook_data_store
+        webhook_data_store.append(webhook_entry)
+        if len(webhook_data_store) > 100:
+            webhook_data_store = webhook_data_store[-100:]
+        
+        print(f"Stored webhook data. Total entries: {len(webhook_data_store)}")
+        
+        # Process the webhook data
         vehicle_id = data.get('vehicleId')
         event_type = data.get('eventType')
         timestamp = data.get('timestamp')
         
+        # Log the webhook for debugging
         print(f"Vehicle ID: {vehicle_id}")
         print(f"Event Type: {event_type}")
         print(f"Timestamp: {timestamp}")
@@ -283,8 +307,27 @@ def webhook():
 @app.route('/webhook-data')
 def webhook_data():
     """Display webhook data dashboard"""
-    content = '''
+    global webhook_data_store
+    
+    # Create HTML for webhook entries
+    webhook_entries_html = ""
+    for entry in reversed(webhook_data_store):  # Show newest first
+        webhook_entries_html += f'''
+        <div class="webhook-entry" style="border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 5px;">
+            <h4>Event: {entry['event_type']}</h4>
+            <p><strong>Vehicle ID:</strong> {entry['vehicle_id']}</p>
+            <p><strong>Timestamp:</strong> {entry['timestamp']}</p>
+            <p><strong>Data:</strong></p>
+            <pre style="background: #f5f5f5; padding: 10px; border-radius: 3px; overflow-x: auto;">{entry['data']}</pre>
+        </div>
+        '''
+    
+    if not webhook_data_store:
+        webhook_entries_html = '<p style="color: #666;">No webhook data received yet. Send some test requests to see data here.</p>'
+    
+    content = f'''
     <h2>Webhook Data Dashboard</h2>
+    
     <div class="info">
         <h3>Tracked Data Signals</h3>
         <ul>
@@ -301,15 +344,28 @@ def webhook_data():
         <p><strong>URL:</strong> https://sc-server-o0m5.onrender.com/webhook</p>
         <p><strong>Method:</strong> POST</p>
         <p><strong>Content-Type:</strong> application/json</p>
+        <p><strong>Total Entries Received:</strong> {len(webhook_data_store)}</p>
     </div>
     
     <div class="info">
-        <h3>Smartcar Dashboard Configuration</h3>
-        <p>Use these URLs in your Smartcar Dashboard:</p>
-        <ul>
-            <li><strong>Vehicle Data Callback URI:</strong> https://sc-server-o0m5.onrender.com/webhook</li>
-            <li><strong>Vehicle Error Callback URI:</strong> https://sc-server-o0m5.onrender.com/webhook</li>
-        </ul>
+        <h3>Received Webhook Data</h3>
+        {webhook_entries_html}
+    </div>
+    
+    <div class="info">
+        <h3>Test Commands</h3>
+        <p>Use these cURL commands to test your webhook:</p>
+        <pre style="background: #f5f5f5; padding: 10px; border-radius: 3px; overflow-x: auto;">
+# Location Test
+curl -X POST https://sc-server-o0m5.onrender.com/webhook \\
+  -H "Content-Type: application/json" \\
+  -d '{{"vehicleId": "a8d1ba1c-abb2-4e69-a637-a4be6", "eventType": "Location.PreciseLocation", "data": {{"latitude": 37.7749, "longitude": -122.4194}}}}'
+
+# Battery Test
+curl -X POST https://sc-server-o0m5.onrender.com/webhook \\
+  -H "Content-Type: application/json" \\
+  -d '{{"vehicleId": "a8d1ba1c-abb2-4e69-a637-a4be6", "eventType": "TractionBattery.StateOfCharge", "data": {{"percentage": 75}}}}'
+        </pre>
     </div>
     
     <a href="/" class="btn">Back to Home</a>
