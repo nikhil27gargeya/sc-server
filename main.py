@@ -25,10 +25,10 @@ client = smartcar.AuthClient(
 @app.route('/')
 def index():
     content = """
-    <h2>Smartcar Demo</h2>
-    <a href="/login" class="btn">Connect Your Vehicle</a>
-    <a href="/vehicle" class="btn">View Vehicle Info</a>
-    <a href="/webhook-data" class="btn">Webhook Dashboard</a>
+    <h2>Smartcar Server</h2>
+    <a href="/login" class="btn">Smartcar Connect</a>
+    <a href="/vehicle" class="btn">Vehicle Info</a>
+    <a href="/webhook-data" class="btn">Webhook Info</a>
     """
     return render_template('base.html', content=content)
 
@@ -122,7 +122,7 @@ def exchange():
         <div class="success">
             <h3>Authentication Successful!</h3>
             <p>Your vehicle has been connected successfully.</p>
-            <a href="/vehicle" class="btn">View Vehicle Information</a>
+            <a href="/vehicle" class="btn">Vehicle Information</a>
         </div>
         '''
         return render_template('base.html', content=content)
@@ -144,7 +144,7 @@ def vehicle():
             <div class="error">
                 <h3>Authentication Required</h3>
                 <p>Your access token has expired or is invalid. Please reconnect your vehicle.</p>
-                <a href="/login" class="btn">Reconnect Your Vehicle</a>
+                <a href="/login" class="btn">Reconnect</a>
             </div>
             '''
             return render_template('base.html', content=content)
@@ -256,9 +256,9 @@ def vehicle():
         content = f'''
         <div class="error">
             <h3>Authentication Error</h3>
-            <p>Your access token has expired or is invalid. Please reconnect your vehicle.</p>
+            <p>Access token has expired.</p>
             <p><strong>Error:</strong> {str(e)}</p>
-            <a href="/login" class="btn">Reconnect Vehicle</a>
+            <a href="/login" class="btn">Reconnect</a>
         </div>
         '''
         return render_template('base.html', content=content)
@@ -402,9 +402,9 @@ def webhook_data():
             webhook_entries_html = '<p style="color: #666;">No webhook data received yet. Send some test requests to see data here.</p>'
 
         content = f'''
-        <h2>Webhook Data Dashboard</h2>
+        <h2>Webhook Info</h2>
         <div class="info">
-            <h3>Tracked Data Signals</h3>
+            <h3>5 Signals</h3>
             <ul>
                 <li><strong>Charge.ChargeLimits:</strong> Battery charging limits</li>
                 <li><strong>Location.PreciseLocation:</strong> Vehicle GPS coordinates</li>
@@ -414,52 +414,20 @@ def webhook_data():
             </ul>
         </div>
         <div class="info">
-            <h3>API Endpoints for Developers</h3>
-            <p>Your developer team can use these endpoints to get vehicle data:</p>
+            <h3>Exposed REST API endpoints</h3>
             <ul>
-                <li><strong>Get Vehicle Location:</strong> <code>GET /api/vehicle/{'{vehicle_id}'}/location</code></li>
-                <li><strong>Get Vehicle Battery:</strong> <code>GET /api/vehicle/{'{vehicle_id}'}/battery</code></li>
-                <li><strong>Get Vehicle Odometer:</strong> <code>GET /api/vehicle/{'{vehicle_id}'}/odometer</code></li>
-                <li><strong>Get Vehicle Charge Limits:</strong> <code>GET /api/vehicle/{'{vehicle_id}'}/charge-limits</code></li>
-                <li><strong>Get All Vehicle Data:</strong> <code>GET /api/vehicle/{'{vehicle_id}'}/all</code></li>
+                <li><strong>Get Vehicle Location:</strong> <code>GET /api/vehicle/vehicle_id/location</code></li>
+                <li><strong>Get Vehicle Battery:</strong> <code>GET /api/vehicle/vehicle_id/battery</code></li>
+                <li><strong>Get Vehicle Odometer:</strong> <code>GET /api/vehicle/vehicle_id/odometer</code></li>
+                <li><strong>Get Vehicle Charge Limits:</strong> <code>GET /api/vehicle/vehicle_id/charge-limits</code></li>
+                <li><strong>Get All Vehicle Data:</strong> <code>GET /api/vehicle/vehicle_id/all</code></li>
                 <li><strong>Get All Vehicles:</strong> <code>GET /api/vehicles</code></li>
             </ul>
-            <h4>Example Usage:</h4>
-            <pre style="background: #f5f5f5; padding: 10px; border-radius: 3px; overflow-x: auto;">
-# Get location of your simulated vehicle
-curl https://sc-server-o0m5.onrender.com/api/vehicle/a8d1ba1c-abb2-4e69-a637-a4be6/location
-# Get all data for your vehicle
-curl https://sc-server-o0m5.onrender.com/api/vehicle/a8d1ba1c-abb2-4e69-a637-a4be6/all
-# Get list of all vehicles
-curl https://sc-server-o0m5.onrender.com/api/vehicles
-            </pre>
-        </div>
         <div class="info">
             <h3>Webhook Endpoint</h3>
             <p><strong>URL:</strong> https://sc-server-o0m5.onrender.com/webhook</p>
-            <p><strong>Method:</strong> POST</p>
-            <p><strong>Content-Type:</strong> application/json</p>
-            <p><strong>Total Entries Received:</strong> {len(webhook_data_store)}</p>
         </div>
-        <div class="info">
-            <h3>Received Webhook Data</h3>
-            {webhook_entries_html}
-        </div>
-        <div class="info">
-            <h3>Test Commands</h3>
-            <p>Use these cURL commands to test your webhook:</p>
-            <pre style="background: #f5f5f5; padding: 10px; border-radius: 3px; overflow-x: auto;">
-# Location Test
-curl -X POST https://sc-server-o0m5.onrender.com/webhook \
-  -H "Content-Type: application/json" \
-  -d '{{"vehicleId": "a8d1ba1c-abb2-4e69-a637-a4be6", "eventType": "Location.PreciseLocation", "data": {{"latitude": 37.7749, "longitude": -122.4194}}}}'
-# Battery Test
-curl -X POST https://sc-server-o0m5.onrender.com/webhook \
-  -H "Content-Type: application/json" \
-  -d '{{"vehicleId": "a8d1ba1c-abb2-4e69-a637-a4be6", "eventType": "TractionBattery.StateOfCharge", "data": {{"percentage": 75}}}}'
-            </pre>
-        </div>
-        <a href="/" class="btn">Back to Home</a>
+        <a href="/" class="btn">Back</a>
         '''
         return render_template('base.html', content=content)
     except Exception as e:
