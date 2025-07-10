@@ -7,7 +7,6 @@ import hmac
 import hashlib
 from datetime import datetime
 
-# Global variable to store webhook data
 webhook_data_store = []
 
 load_dotenv()
@@ -38,6 +37,70 @@ def login():
     auth_url = client.get_auth_url()
     return redirect(auth_url)
 
+def refresh_access_token(refresh_token):
+    """Refresh the access token using the refresh token"""
+    try:
+        new_token = client.refresh_token(refresh_token)
+        print(f"Token refreshed successfully: {new_token}")
+        return new_token
+    except Exception as e:
+        print(f"Error refreshing token: {str(e)}")
+        return None
+
+def is_token_expired(token_data):
+    """Check if the access token is expired"""
+    if not token_data or not isinstance(token_data, dict):
+        return True
+    
+    expiration = token_data.get('expiration')
+    if not expiration:
+        return True
+    
+    # Add 5 minute buffer to refresh before actual expiration
+    from datetime import datetime, timezone, timedelta
+    buffer_time = datetime.now(timezone.utc) + timedelta(minutes=5)
+    return expiration < buffer_time
+
+def get_valid_access_token():
+    """Get a valid access token, refreshing if necessary"""
+    token_data = session.get('access_token')
+    
+    print(f"Current token data: {token_data}")
+    
+    if not token_data:
+        print("No token data found in session")
+        return None
+    
+    # If token_data is a string (old format), convert to dict
+    if isinstance(token_data, str):
+        print("Token is in old string format, cannot refresh")
+        # We can't refresh without the full token object, so return None
+        return None
+    
+    # Check if token is expired
+    if is_token_expired(token_data):
+        print("Token is expired, attempting to refresh...")
+        refresh_token = token_data.get('refresh_token')
+        if refresh_token:
+            new_token = refresh_access_token(refresh_token)
+            if new_token:
+                session['access_token'] = new_token
+                print("Token refreshed successfully")
+                return new_token.get('access_token')
+            else:
+                # Refresh failed, clear session
+                print("Token refresh failed, clearing session")
+                session.pop('access_token', None)
+                return None
+        else:
+            # No refresh token, clear session
+            print("No refresh token available, clearing session")
+            session.pop('access_token', None)
+            return None
+    
+    print("Token is valid")
+    return token_data.get('access_token')
+
 @app.route('/exchange')
 def exchange():
     code = request.args.get('code')
@@ -51,8 +114,9 @@ def exchange():
         
         print(f"Received access token: {access_token}")
         
-        session['access_token'] = access_token['access_token']
-        print(f"Stored access token in session: {session.get('access_token')}")
+        # Store the full token object including refresh token
+        session['access_token'] = access_token
+        print(f"Stored full token object in session")
         
         content = '''
         <div class="success">
@@ -70,33 +134,17 @@ def exchange():
 @app.route('/vehicle')
 def vehicle():
     try:
-        access_token_data = session.get('access_token')
+        # Get a valid access token (with automatic refresh if needed)
+        access_token = get_valid_access_token()
         
-        print(f"Session access_token: {access_token_data}")
         print(f"Session keys: {list(session.keys())}")
         
-        if not access_token_data:
-            content = '''
-            <div class="error">
-                <h3>No Access Token Found</h3>
-                <p>Please authenticate your vehicle first.</p>
-                <a href="/login" class="btn">Connect Your Vehicle</a>
-            </div>
-            '''
-            return render_template('base.html', content=content)
-        
-        # Extract the access token string from the token object
-        if isinstance(access_token_data, dict):
-            access_token = access_token_data.get('access_token')
-        else:
-            access_token = access_token_data
-            
         if not access_token:
             content = '''
             <div class="error">
-                <h3>Invalid Access Token</h3>
-                <p>Please authenticate your vehicle first.</p>
-                <a href="/login" class="btn">Connect Your Vehicle</a>
+                <h3>Authentication Required</h3>
+                <p>Your access token has expired or is invalid. Please reconnect your vehicle.</p>
+                <a href="/login" class="btn">Reconnect Your Vehicle</a>
             </div>
             '''
             return render_template('base.html', content=content)
@@ -203,10 +251,12 @@ def vehicle():
         return render_template('base.html', content=content)
     except smartcar.exceptions.AuthenticationException as e:
         print(f"Authentication error: {str(e)}")
+        # Clear the invalid token from session
+        session.pop('access_token', None)
         content = f'''
         <div class="error">
             <h3>Authentication Error</h3>
-            <p>There was an authentication error. Please reconnect your vehicle.</p>
+            <p>Your access token has expired or is invalid. Please reconnect your vehicle.</p>
             <p><strong>Error:</strong> {str(e)}</p>
             <a href="/login" class="btn">Reconnect Vehicle</a>
         </div>
