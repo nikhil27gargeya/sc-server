@@ -307,103 +307,99 @@ def webhook():
 @app.route('/webhook-data')
 def webhook_data():
     """Display webhook data dashboard"""
-    global webhook_data_store
-    
-    # Create HTML for webhook entries
-    webhook_entries_html = ""
-    for entry in reversed(webhook_data_store):  # Show newest first
-        webhook_entries_html += f'''
-        <div class="webhook-entry" style="border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 5px;">
-            <h4>Event: {entry['event_type']}</h4>
-            <p><strong>Vehicle ID:</strong> {entry['vehicle_id']}</p>
-            <p><strong>Timestamp:</strong> {entry['timestamp']}</p>
-            <p><strong>Data:</strong></p>
-            <pre style="background: #f5f5f5; padding: 10px; border-radius: 3px; overflow-x: auto;">{entry['data']}</pre>
+    try:
+        global webhook_data_store
+        import json
+        # Create HTML for webhook entries
+        webhook_entries_html = ""
+        for entry in reversed(webhook_data_store):  # Show newest first
+            try:
+                data_str = json.dumps(entry.get('data', {}), indent=2)
+            except Exception:
+                data_str = str(entry.get('data', {}))
+            webhook_entries_html += f'''
+            <div class="webhook-entry" style="border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 5px;">
+                <h4>Event: {entry.get('event_type', 'N/A')}</h4>
+                <p><strong>Vehicle ID:</strong> {entry.get('vehicle_id', 'N/A')}</p>
+                <p><strong>Timestamp:</strong> {entry.get('timestamp', 'N/A')}</p>
+                <p><strong>Data:</strong></p>
+                <pre style="background: #f5f5f5; padding: 10px; border-radius: 3px; overflow-x: auto;">{data_str}</pre>
+            </div>
+            '''
+
+        if not webhook_data_store:
+            webhook_entries_html = '<p style="color: #666;">No webhook data received yet. Send some test requests to see data here.</p>'
+
+        content = f'''
+        <h2>Webhook Data Dashboard</h2>
+        <div class="info">
+            <h3>Tracked Data Signals</h3>
+            <ul>
+                <li><strong>Charge.ChargeLimits:</strong> Battery charging limits</li>
+                <li><strong>Location.PreciseLocation:</strong> Vehicle GPS coordinates</li>
+                <li><strong>Odometer.TraveledDistance:</strong> Total distance traveled</li>
+                <li><strong>TractionBattery.StateOfCharge:</strong> Current battery percentage</li>
+                <li><strong>TractionBattery.NominalCapacity:</strong> Battery capacity</li>
+            </ul>
         </div>
-        '''
-    
-    if not webhook_data_store:
-        webhook_entries_html = '<p style="color: #666;">No webhook data received yet. Send some test requests to see data here.</p>'
-    
-    content = f'''
-    <h2>Webhook Data Dashboard</h2>
-    
-    <div class="info">
-        <h3>Tracked Data Signals</h3>
-        <ul>
-            <li><strong>Charge.ChargeLimits:</strong> Battery charging limits</li>
-            <li><strong>Location.PreciseLocation:</strong> Vehicle GPS coordinates</li>
-            <li><strong>Odometer.TraveledDistance:</strong> Total distance traveled</li>
-            <li><strong>TractionBattery.StateOfCharge:</strong> Current battery percentage</li>
-            <li><strong>TractionBattery.NominalCapacity:</strong> Battery capacity</li>
-        </ul>
-    </div>
-    
-    <div class="info">
-        <h3>API Endpoints for Developers</h3>
-        <p>Your developer team can use these endpoints to get vehicle data:</p>
-        <ul>
-            <li><strong>Get Vehicle Location:</strong> <code>GET /api/vehicle/{vehicle_id}/location</code></li>
-            <li><strong>Get Vehicle Battery:</strong> <code>GET /api/vehicle/{vehicle_id}/battery</code></li>
-            <li><strong>Get Vehicle Odometer:</strong> <code>GET /api/vehicle/{vehicle_id}/odometer</code></li>
-            <li><strong>Get Vehicle Charge Limits:</strong> <code>GET /api/vehicle/{vehicle_id}/charge-limits</code></li>
-            <li><strong>Get All Vehicle Data:</strong> <code>GET /api/vehicle/{vehicle_id}/all</code></li>
-            <li><strong>Get All Vehicles:</strong> <code>GET /api/vehicles</code></li>
-        </ul>
-        
-        <h4>Example Usage:</h4>
-        <pre style="background: #f5f5f5; padding: 10px; border-radius: 3px; overflow-x: auto;">
+        <div class="info">
+            <h3>API Endpoints for Developers</h3>
+            <p>Your developer team can use these endpoints to get vehicle data:</p>
+            <ul>
+                <li><strong>Get Vehicle Location:</strong> <code>GET /api/vehicle/{'{vehicle_id}'}/location</code></li>
+                <li><strong>Get Vehicle Battery:</strong> <code>GET /api/vehicle/{'{vehicle_id}'}/battery</code></li>
+                <li><strong>Get Vehicle Odometer:</strong> <code>GET /api/vehicle/{'{vehicle_id}'}/odometer</code></li>
+                <li><strong>Get Vehicle Charge Limits:</strong> <code>GET /api/vehicle/{'{vehicle_id}'}/charge-limits</code></li>
+                <li><strong>Get All Vehicle Data:</strong> <code>GET /api/vehicle/{'{vehicle_id}'}/all</code></li>
+                <li><strong>Get All Vehicles:</strong> <code>GET /api/vehicles</code></li>
+            </ul>
+            <h4>Example Usage:</h4>
+            <pre style="background: #f5f5f5; padding: 10px; border-radius: 3px; overflow-x: auto;">
 # Get location of your simulated vehicle
 curl https://sc-server-o0m5.onrender.com/api/vehicle/a8d1ba1c-abb2-4e69-a637-a4be6/location
-
 # Get all data for your vehicle
 curl https://sc-server-o0m5.onrender.com/api/vehicle/a8d1ba1c-abb2-4e69-a637-a4be6/all
-
 # Get list of all vehicles
 curl https://sc-server-o0m5.onrender.com/api/vehicles
-        </pre>
-    </div>
-    
-    <div class="info">
-        <h3>Webhook Endpoint</h3>
-        <p><strong>URL:</strong> https://sc-server-o0m5.onrender.com/webhook</p>
-        <p><strong>Method:</strong> POST</p>
-        <p><strong>Content-Type:</strong> application/json</p>
-        <p><strong>Total Entries Received:</strong> {len(webhook_data_store)}</p>
-    </div>
-    
-    <div class="info">
-        <h3>Received Webhook Data</h3>
-        {webhook_entries_html}
-    </div>
-    
-    <div class="info">
-        <h3>Test Commands</h3>
-        <p>Use these cURL commands to test your webhook:</p>
-        <pre style="background: #f5f5f5; padding: 10px; border-radius: 3px; overflow-x: auto;">
+            </pre>
+        </div>
+        <div class="info">
+            <h3>Webhook Endpoint</h3>
+            <p><strong>URL:</strong> https://sc-server-o0m5.onrender.com/webhook</p>
+            <p><strong>Method:</strong> POST</p>
+            <p><strong>Content-Type:</strong> application/json</p>
+            <p><strong>Total Entries Received:</strong> {len(webhook_data_store)}</p>
+        </div>
+        <div class="info">
+            <h3>Received Webhook Data</h3>
+            {webhook_entries_html}
+        </div>
+        <div class="info">
+            <h3>Test Commands</h3>
+            <p>Use these cURL commands to test your webhook:</p>
+            <pre style="background: #f5f5f5; padding: 10px; border-radius: 3px; overflow-x: auto;">
 # Location Test
-curl -X POST https://sc-server-o0m5.onrender.com/webhook \\
-  -H "Content-Type: application/json" \\
+curl -X POST https://sc-server-o0m5.onrender.com/webhook \
+  -H "Content-Type: application/json" \
   -d '{{"vehicleId": "a8d1ba1c-abb2-4e69-a637-a4be6", "eventType": "Location.PreciseLocation", "data": {{"latitude": 37.7749, "longitude": -122.4194}}}}'
-
 # Battery Test
-curl -X POST https://sc-server-o0m5.onrender.com/webhook \\
-  -H "Content-Type: application/json" \\
+curl -X POST https://sc-server-o0m5.onrender.com/webhook \
+  -H "Content-Type: application/json" \
   -d '{{"vehicleId": "a8d1ba1c-abb2-4e69-a637-a4be6", "eventType": "TractionBattery.StateOfCharge", "data": {{"percentage": 75}}}}'
-        </pre>
-    </div>
-    
-    <a href="/" class="btn">Back to Home</a>
-    '''
-    
-    return render_template('base.html', content=content)
+            </pre>
+        </div>
+        <a href="/" class="btn">Back to Home</a>
+        '''
+        return render_template('base.html', content=content)
+    except Exception as e:
+        print(f"Error in webhook_data route: {str(e)}")
+        return f'<div class="error">Error loading webhook data: {str(e)}</div>', 500
 
 @app.route('/api/vehicle/<vehicle_id>/location')
 def get_vehicle_location(vehicle_id):
     """Get location data for a specific vehicle"""
     global webhook_data_store
     
-    # Find the most recent location data for this vehicle
     location_entries = [
         entry for entry in webhook_data_store 
         if entry['vehicle_id'] == vehicle_id and entry['event_type'] == 'Location.PreciseLocation'
@@ -412,7 +408,6 @@ def get_vehicle_location(vehicle_id):
     if not location_entries:
         return {'error': 'No location data found for this vehicle'}, 404
     
-    # Return the most recent location data
     latest_location = location_entries[-1]
     return {
         'vehicle_id': vehicle_id,
@@ -425,7 +420,6 @@ def get_vehicle_battery(vehicle_id):
     """Get battery data for a specific vehicle"""
     global webhook_data_store
     
-    # Find the most recent battery data for this vehicle
     battery_entries = [
         entry for entry in webhook_data_store 
         if entry['vehicle_id'] == vehicle_id and entry['event_type'] in ['TractionBattery.StateOfCharge', 'TractionBattery.NominalCapacity']
@@ -434,7 +428,6 @@ def get_vehicle_battery(vehicle_id):
     if not battery_entries:
         return {'error': 'No battery data found for this vehicle'}, 404
     
-    # Group by event type
     battery_data = {}
     for entry in battery_entries:
         if entry['event_type'] == 'TractionBattery.StateOfCharge':
@@ -448,12 +441,51 @@ def get_vehicle_battery(vehicle_id):
         'battery': battery_data
     }
 
+@app.route('/api/vehicle/<vehicle_id>/battery/state-of-charge')
+def get_vehicle_battery_state_of_charge(vehicle_id):
+    """Get battery state of charge for a specific vehicle"""
+    global webhook_data_store
+    
+    soc_entries = [
+        entry for entry in webhook_data_store 
+        if entry['vehicle_id'] == vehicle_id and entry['event_type'] == 'TractionBattery.StateOfCharge'
+    ]
+    
+    if not soc_entries:
+        return {'error': 'No battery state of charge data found for this vehicle'}, 404
+    
+    latest_soc = soc_entries[-1]
+    return {
+        'vehicle_id': vehicle_id,
+        'timestamp': latest_soc['timestamp'],
+        'state_of_charge': latest_soc['data']
+    }
+
+@app.route('/api/vehicle/<vehicle_id>/battery/capacity')
+def get_vehicle_battery_capacity(vehicle_id):
+    """Get battery nominal capacity for a specific vehicle"""
+    global webhook_data_store
+    
+    capacity_entries = [
+        entry for entry in webhook_data_store 
+        if entry['vehicle_id'] == vehicle_id and entry['event_type'] == 'TractionBattery.NominalCapacity'
+    ]
+    
+    if not capacity_entries:
+        return {'error': 'No battery capacity data found for this vehicle'}, 404
+    
+    latest_capacity = capacity_entries[-1]
+    return {
+        'vehicle_id': vehicle_id,
+        'timestamp': latest_capacity['timestamp'],
+        'nominal_capacity': latest_capacity['data']
+    }
+
 @app.route('/api/vehicle/<vehicle_id>/odometer')
 def get_vehicle_odometer(vehicle_id):
     """Get odometer data for a specific vehicle"""
     global webhook_data_store
     
-    # Find the most recent odometer data for this vehicle
     odometer_entries = [
         entry for entry in webhook_data_store 
         if entry['vehicle_id'] == vehicle_id and entry['event_type'] == 'Odometer.TraveledDistance'
@@ -462,7 +494,6 @@ def get_vehicle_odometer(vehicle_id):
     if not odometer_entries:
         return {'error': 'No odometer data found for this vehicle'}, 404
     
-    # Return the most recent odometer data
     latest_odometer = odometer_entries[-1]
     return {
         'vehicle_id': vehicle_id,
@@ -475,7 +506,6 @@ def get_vehicle_charge_limits(vehicle_id):
     """Get charge limits data for a specific vehicle"""
     global webhook_data_store
     
-    # Find the most recent charge limits data for this vehicle
     charge_entries = [
         entry for entry in webhook_data_store 
         if entry['vehicle_id'] == vehicle_id and entry['event_type'] == 'Charge.ChargeLimits'
@@ -484,7 +514,6 @@ def get_vehicle_charge_limits(vehicle_id):
     if not charge_entries:
         return {'error': 'No charge limits data found for this vehicle'}, 404
     
-    # Return the most recent charge limits data
     latest_charge = charge_entries[-1]
     return {
         'vehicle_id': vehicle_id,
@@ -494,10 +523,8 @@ def get_vehicle_charge_limits(vehicle_id):
 
 @app.route('/api/vehicle/<vehicle_id>/all')
 def get_all_vehicle_data(vehicle_id):
-    """Get all data for a specific vehicle"""
     global webhook_data_store
     
-    # Find all data for this vehicle
     vehicle_entries = [
         entry for entry in webhook_data_store 
         if entry['vehicle_id'] == vehicle_id
@@ -506,7 +533,6 @@ def get_all_vehicle_data(vehicle_id):
     if not vehicle_entries:
         return {'error': 'No data found for this vehicle'}, 404
     
-    # Group by data type
     vehicle_data = {
         'vehicle_id': vehicle_id,
         'last_updated': vehicle_entries[-1]['timestamp'],
@@ -526,10 +552,8 @@ def get_all_vehicle_data(vehicle_id):
 
 @app.route('/api/vehicles')
 def get_all_vehicles():
-    """Get list of all vehicles with data"""
     global webhook_data_store
     
-    # Get unique vehicle IDs
     vehicle_ids = list(set([entry['vehicle_id'] for entry in webhook_data_store]))
     
     return {
@@ -539,23 +563,19 @@ def get_all_vehicles():
     }
 
 def handle_verification(data):
-    """Handle Smartcar's webhook verification challenge"""
     try:
-        # Get the challenge from the payload
         challenge = data.get('payload', {}).get('challenge')
         webhook_id = data.get('webhookId')
         
         print(f"Verification request for webhook ID: {webhook_id}")
         print(f"Challenge: {challenge}")
         
-        # Get the management token from environment variables
         management_token = os.getenv('SMARTCAR_MANAGEMENT_TOKEN')
         
         if not management_token:
             print("Error: SMARTCAR_MANAGEMENT_TOKEN not found in environment variables")
             return {'error': 'Management token not configured'}, 500
         
-        # Generate HMAC using the management token and challenge
         hmac_hash = hmac.new(
             management_token.encode('utf-8'),
             challenge.encode('utf-8'),
@@ -564,7 +584,6 @@ def handle_verification(data):
         
         print(f"Generated HMAC: {hmac_hash}")
         
-        # Return the challenge response
         return {'challenge': hmac_hash}, 200
         
     except Exception as e:
