@@ -6,13 +6,8 @@ from dotenv import load_dotenv
 import hmac
 import hashlib
 from datetime import datetime
-from models import create_tables, WebhookEvent, SessionLocal
-import json
 
-# Initialize database
-create_tables()
-
-# Global variable to store webhook data (for backward compatibility)
+# Global variable to store webhook data
 webhook_data_store = []
 
 load_dotenv()
@@ -233,20 +228,7 @@ def webhook():
         if data.get('eventName') == 'verify':
             return handle_verification(data)
         
-        # Store in database
-        db = SessionLocal()
-        try:
-            webhook_event = WebhookEvent.from_webhook_payload(data)
-            db.add(webhook_event)
-            db.commit()
-            print(f"Stored webhook event in database: {webhook_event.id}")
-        except Exception as db_error:
-            print(f"Database error: {str(db_error)}")
-            db.rollback()
-        finally:
-            db.close()
-        
-        # Also store in global store for backward compatibility (keep last 100 entries)
+        # Store the webhook data with timestamp
         webhook_entry = {
             'timestamp': datetime.now().isoformat(),
             'vehicle_id': data.get('vehicleId'),
@@ -255,6 +237,7 @@ def webhook():
             'raw_data': data
         }
         
+        # Add to global store (keep last 100 entries)
         global webhook_data_store
         webhook_data_store.append(webhook_entry)
         if len(webhook_data_store) > 100:
@@ -415,232 +398,169 @@ curl -X POST https://sc-server-o0m5.onrender.com/webhook \
 @app.route('/api/vehicle/<vehicle_id>/location')
 def get_vehicle_location(vehicle_id):
     """Get location data for a specific vehicle"""
-    db = SessionLocal()
-    try:
-        # Get the latest location event for this vehicle
-        latest_location = db.query(WebhookEvent).filter(
-            WebhookEvent.vehicle_id == vehicle_id,
-            WebhookEvent.event_type == 'Location.PreciseLocation'
-        ).order_by(WebhookEvent.timestamp.desc()).first()
-        
-        if not latest_location:
-            return {'error': 'No location data found for this vehicle'}, 404
-        
-        processed_data = json.loads(latest_location.processed_data)
-        return {
-            'vehicle_id': vehicle_id,
-            'timestamp': latest_location.timestamp.isoformat(),
-            'location': processed_data
-        }
-    except Exception as e:
-        print(f"Error getting location data: {str(e)}")
-        return {'error': 'Error retrieving location data'}, 500
-    finally:
-        db.close()
+    global webhook_data_store
+    
+    location_entries = [
+        entry for entry in webhook_data_store 
+        if entry['vehicle_id'] == vehicle_id and entry['event_type'] == 'Location.PreciseLocation'
+    ]
+    
+    if not location_entries:
+        return {'error': 'No location data found for this vehicle'}, 404
+    
+    latest_location = location_entries[-1]
+    return {
+        'vehicle_id': vehicle_id,
+        'timestamp': latest_location['timestamp'],
+        'location': latest_location['data']
+    }
 
 @app.route('/api/vehicle/<vehicle_id>/battery')
 def get_vehicle_battery(vehicle_id):
     """Get battery data for a specific vehicle"""
-    db = SessionLocal()
-    try:
-        # Get the latest battery events for this vehicle
-        soc_event = db.query(WebhookEvent).filter(
-            WebhookEvent.vehicle_id == vehicle_id,
-            WebhookEvent.event_type == 'TractionBattery.StateOfCharge'
-        ).order_by(WebhookEvent.timestamp.desc()).first()
-        
-        capacity_event = db.query(WebhookEvent).filter(
-            WebhookEvent.vehicle_id == vehicle_id,
-            WebhookEvent.event_type == 'TractionBattery.NominalCapacity'
-        ).order_by(WebhookEvent.timestamp.desc()).first()
-        
-        if not soc_event and not capacity_event:
-            return {'error': 'No battery data found for this vehicle'}, 404
-        
-        battery_data = {}
-        latest_timestamp = None
-        
-        if soc_event:
-            battery_data['state_of_charge'] = json.loads(soc_event.processed_data)
-            latest_timestamp = soc_event.timestamp
-        
-        if capacity_event:
-            battery_data['nominal_capacity'] = json.loads(capacity_event.processed_data)
-            if not latest_timestamp or capacity_event.timestamp > latest_timestamp:
-                latest_timestamp = capacity_event.timestamp
-        
-        return {
-            'vehicle_id': vehicle_id,
-            'timestamp': latest_timestamp.isoformat() if latest_timestamp else None,
-            'battery': battery_data
-        }
-    except Exception as e:
-        print(f"Error getting battery data: {str(e)}")
-        return {'error': 'Error retrieving battery data'}, 500
-    finally:
-        db.close()
+    global webhook_data_store
+    
+    battery_entries = [
+        entry for entry in webhook_data_store 
+        if entry['vehicle_id'] == vehicle_id and entry['event_type'] in ['TractionBattery.StateOfCharge', 'TractionBattery.NominalCapacity']
+    ]
+    
+    if not battery_entries:
+        return {'error': 'No battery data found for this vehicle'}, 404
+    
+    battery_data = {}
+    for entry in battery_entries:
+        if entry['event_type'] == 'TractionBattery.StateOfCharge':
+            battery_data['state_of_charge'] = entry['data']
+        elif entry['event_type'] == 'TractionBattery.NominalCapacity':
+            battery_data['nominal_capacity'] = entry['data']
+    
+    return {
+        'vehicle_id': vehicle_id,
+        'timestamp': battery_entries[-1]['timestamp'],
+        'battery': battery_data
+    }
 
 @app.route('/api/vehicle/<vehicle_id>/battery/state-of-charge')
 def get_vehicle_battery_state_of_charge(vehicle_id):
     """Get battery state of charge for a specific vehicle"""
-    db = SessionLocal()
-    try:
-        # Get the latest state of charge event for this vehicle
-        latest_soc = db.query(WebhookEvent).filter(
-            WebhookEvent.vehicle_id == vehicle_id,
-            WebhookEvent.event_type == 'TractionBattery.StateOfCharge'
-        ).order_by(WebhookEvent.timestamp.desc()).first()
-        
-        if not latest_soc:
-            return {'error': 'No battery state of charge data found for this vehicle'}, 404
-        
-        processed_data = json.loads(latest_soc.processed_data)
-        return {
-            'vehicle_id': vehicle_id,
-            'timestamp': latest_soc.timestamp.isoformat(),
-            'state_of_charge': processed_data
-        }
-    except Exception as e:
-        print(f"Error getting battery state of charge: {str(e)}")
-        return {'error': 'Error retrieving battery state of charge data'}, 500
-    finally:
-        db.close()
+    global webhook_data_store
+    
+    soc_entries = [
+        entry for entry in webhook_data_store 
+        if entry['vehicle_id'] == vehicle_id and entry['event_type'] == 'TractionBattery.StateOfCharge'
+    ]
+    
+    if not soc_entries:
+        return {'error': 'No battery state of charge data found for this vehicle'}, 404
+    
+    latest_soc = soc_entries[-1]
+    return {
+        'vehicle_id': vehicle_id,
+        'timestamp': latest_soc['timestamp'],
+        'state_of_charge': latest_soc['data']
+    }
 
 @app.route('/api/vehicle/<vehicle_id>/battery/capacity')
 def get_vehicle_battery_capacity(vehicle_id):
     """Get battery nominal capacity for a specific vehicle"""
-    db = SessionLocal()
-    try:
-        # Get the latest capacity event for this vehicle
-        latest_capacity = db.query(WebhookEvent).filter(
-            WebhookEvent.vehicle_id == vehicle_id,
-            WebhookEvent.event_type == 'TractionBattery.NominalCapacity'
-        ).order_by(WebhookEvent.timestamp.desc()).first()
-        
-        if not latest_capacity:
-            return {'error': 'No battery capacity data found for this vehicle'}, 404
-        
-        processed_data = json.loads(latest_capacity.processed_data)
-        return {
-            'vehicle_id': vehicle_id,
-            'timestamp': latest_capacity.timestamp.isoformat(),
-            'nominal_capacity': processed_data
-        }
-    except Exception as e:
-        print(f"Error getting battery capacity: {str(e)}")
-        return {'error': 'Error retrieving battery capacity data'}, 500
-    finally:
-        db.close()
+    global webhook_data_store
+    
+    capacity_entries = [
+        entry for entry in webhook_data_store 
+        if entry['vehicle_id'] == vehicle_id and entry['event_type'] == 'TractionBattery.NominalCapacity'
+    ]
+    
+    if not capacity_entries:
+        return {'error': 'No battery capacity data found for this vehicle'}, 404
+    
+    latest_capacity = capacity_entries[-1]
+    return {
+        'vehicle_id': vehicle_id,
+        'timestamp': latest_capacity['timestamp'],
+        'nominal_capacity': latest_capacity['data']
+    }
 
 @app.route('/api/vehicle/<vehicle_id>/odometer')
 def get_vehicle_odometer(vehicle_id):
     """Get odometer data for a specific vehicle"""
-    db = SessionLocal()
-    try:
-        # Get the latest odometer event for this vehicle
-        latest_odometer = db.query(WebhookEvent).filter(
-            WebhookEvent.vehicle_id == vehicle_id,
-            WebhookEvent.event_type == 'Odometer.TraveledDistance'
-        ).order_by(WebhookEvent.timestamp.desc()).first()
-        
-        if not latest_odometer:
-            return {'error': 'No odometer data found for this vehicle'}, 404
-        
-        processed_data = json.loads(latest_odometer.processed_data)
-        return {
-            'vehicle_id': vehicle_id,
-            'timestamp': latest_odometer.timestamp.isoformat(),
-            'odometer': processed_data
-        }
-    except Exception as e:
-        print(f"Error getting odometer data: {str(e)}")
-        return {'error': 'Error retrieving odometer data'}, 500
-    finally:
-        db.close()
+    global webhook_data_store
+    
+    odometer_entries = [
+        entry for entry in webhook_data_store 
+        if entry['vehicle_id'] == vehicle_id and entry['event_type'] == 'Odometer.TraveledDistance'
+    ]
+    
+    if not odometer_entries:
+        return {'error': 'No odometer data found for this vehicle'}, 404
+    
+    latest_odometer = odometer_entries[-1]
+    return {
+        'vehicle_id': vehicle_id,
+        'timestamp': latest_odometer['timestamp'],
+        'odometer': latest_odometer['data']
+    }
 
 @app.route('/api/vehicle/<vehicle_id>/charge-limits')
 def get_vehicle_charge_limits(vehicle_id):
     """Get charge limits data for a specific vehicle"""
-    db = SessionLocal()
-    try:
-        # Get the latest charge limits event for this vehicle
-        latest_charge = db.query(WebhookEvent).filter(
-            WebhookEvent.vehicle_id == vehicle_id,
-            WebhookEvent.event_type == 'Charge.ChargeLimits'
-        ).order_by(WebhookEvent.timestamp.desc()).first()
-        
-        if not latest_charge:
-            return {'error': 'No charge limits data found for this vehicle'}, 404
-        
-        processed_data = json.loads(latest_charge.processed_data)
-        return {
-            'vehicle_id': vehicle_id,
-            'timestamp': latest_charge.timestamp.isoformat(),
-            'charge_limits': processed_data
-        }
-    except Exception as e:
-        print(f"Error getting charge limits data: {str(e)}")
-        return {'error': 'Error retrieving charge limits data'}, 500
-    finally:
-        db.close()
+    global webhook_data_store
+    
+    charge_entries = [
+        entry for entry in webhook_data_store 
+        if entry['vehicle_id'] == vehicle_id and entry['event_type'] == 'Charge.ChargeLimits'
+    ]
+    
+    if not charge_entries:
+        return {'error': 'No charge limits data found for this vehicle'}, 404
+    
+    latest_charge = charge_entries[-1]
+    return {
+        'vehicle_id': vehicle_id,
+        'timestamp': latest_charge['timestamp'],
+        'charge_limits': latest_charge['data']
+    }
 
 @app.route('/api/vehicle/<vehicle_id>/all')
 def get_all_vehicle_data(vehicle_id):
-    db = SessionLocal()
-    try:
-        # Get all events for this vehicle
-        vehicle_events = db.query(WebhookEvent).filter(
-            WebhookEvent.vehicle_id == vehicle_id
-        ).order_by(WebhookEvent.timestamp.desc()).all()
-        
-        if not vehicle_events:
-            return {'error': 'No data found for this vehicle'}, 404
-        
-        vehicle_data = {
-            'vehicle_id': vehicle_id,
-            'last_updated': vehicle_events[0].timestamp.isoformat(),
-            'data': {}
-        }
-        
-        for event in vehicle_events:
-            event_type = event.event_type
-            if event_type not in vehicle_data['data']:
-                vehicle_data['data'][event_type] = []
-            
-            processed_data = json.loads(event.processed_data)
-            vehicle_data['data'][event_type].append({
-                'timestamp': event.timestamp.isoformat(),
-                'data': processed_data
-            })
-        
-        return vehicle_data
-    except Exception as e:
-        print(f"Error getting all vehicle data: {str(e)}")
-        return {'error': 'Error retrieving vehicle data'}, 500
-    finally:
-        db.close()
+    global webhook_data_store
+    
+    vehicle_entries = [
+        entry for entry in webhook_data_store 
+        if entry['vehicle_id'] == vehicle_id
+    ]
+    
+    if not vehicle_entries:
+        return {'error': 'No data found for this vehicle'}, 404
+    
+    vehicle_data = {
+        'vehicle_id': vehicle_id,
+        'last_updated': vehicle_entries[-1]['timestamp'],
+        'data': {}
+    }
+    
+    for entry in vehicle_entries:
+        event_type = entry['event_type']
+        if event_type not in vehicle_data['data']:
+            vehicle_data['data'][event_type] = []
+        vehicle_data['data'][event_type].append({
+            'timestamp': entry['timestamp'],
+            'data': entry['data']
+        })
+    
+    return vehicle_data
 
 @app.route('/api/vehicles')
 def get_all_vehicles():
-    db = SessionLocal()
-    try:
-        # Get all unique vehicle IDs
-        vehicle_ids = db.query(WebhookEvent.vehicle_id).distinct().all()
-        vehicle_ids = [row[0] for row in vehicle_ids]
-        
-        # Get total count of events
-        total_entries = db.query(WebhookEvent).count()
-        
-        return {
-            'vehicles': vehicle_ids,
-            'total_vehicles': len(vehicle_ids),
-            'total_entries': total_entries
-        }
-    except Exception as e:
-        print(f"Error getting vehicles: {str(e)}")
-        return {'error': 'Error retrieving vehicles'}, 500
-    finally:
-        db.close()
+    global webhook_data_store
+    
+    vehicle_ids = list(set([entry['vehicle_id'] for entry in webhook_data_store]))
+    
+    return {
+        'vehicles': vehicle_ids,
+        'total_vehicles': len(vehicle_ids),
+        'total_entries': len(webhook_data_store)
+    }
 
 def handle_verification(data):
     try:

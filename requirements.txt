@@ -2,6 +2,4 @@ Flask==2.3.3
 smartcar==5.0.0
 python-dotenv==1.0.0
 requests==2.31.0
-gunicorn==21.2.0
-SQLAlchemy==2.0.27
-psycopg2-binary==2.9.9 
+gunicorn==21.2.0 
