@@ -114,7 +114,6 @@ def exchange():
         
         print(f"Received access token: {access_token}")
         
-        # Store the full token object including refresh token
         session['access_token'] = access_token
         print(f"Stored full token object in session")
         
