@@ -288,13 +288,13 @@ def vehicle():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    global webhook_data_store
     try:
         data = request.get_json()
         print(f"Received webhook data: {data}")
 
         # Check for batch payload (VehicleState type)
         if data.get("type") == "VehicleState" and "data" in data and "vehicles" in data["data"]:
-            global webhook_data_store
             for vehicle in data["data"]["vehicles"]:
                 vehicle_id = vehicle.get("vehicleId")
                 signals = vehicle.get("signals", {})
