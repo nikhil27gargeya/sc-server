@@ -289,11 +289,79 @@ def vehicle():
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        # Get the webhook data
         data = request.get_json()
-        
         print(f"Received webhook data: {data}")
-        
+
+        # Check for batch payload (VehicleState type)
+        if data.get("type") == "VehicleState" and "data" in data and "vehicles" in data["data"]:
+            global webhook_data_store
+            for vehicle in data["data"]["vehicles"]:
+                vehicle_id = vehicle.get("vehicleId")
+                signals = vehicle.get("signals", {})
+
+                # Location.PreciseLocation
+                loc = signals.get("location", {}).get("preciseLocation")
+                if loc:
+                    webhook_data_store.append({
+                        "timestamp": data.get("deliveryTime"),
+                        "vehicle_id": vehicle_id,
+                        "event_type": "Location.PreciseLocation",
+                        "data": loc,
+                        "raw_data": data
+                    })
+
+                # Odometer.TraveledDistance
+                odo = signals.get("odometer", {}).get("traveledDistance")
+                if odo:
+                    webhook_data_store.append({
+                        "timestamp": data.get("deliveryTime"),
+                        "vehicle_id": vehicle_id,
+                        "event_type": "Odometer.TraveledDistance",
+                        "data": odo,
+                        "raw_data": data
+                    })
+
+                # TractionBattery.StateOfCharge
+                soc = signals.get("tractionBattery", {}).get("stateOfCharge")
+                if soc:
+                    webhook_data_store.append({
+                        "timestamp": data.get("deliveryTime"),
+                        "vehicle_id": vehicle_id,
+                        "event_type": "TractionBattery.StateOfCharge",
+                        "data": soc,
+                        "raw_data": data
+                    })
+
+                # TractionBattery.NominalCapacity
+                cap = signals.get("tractionBattery", {}).get("nominalCapacity")
+                if cap:
+                    webhook_data_store.append({
+                        "timestamp": data.get("deliveryTime"),
+                        "vehicle_id": vehicle_id,
+                        "event_type": "TractionBattery.NominalCapacity",
+                        "data": cap,
+                        "raw_data": data
+                    })
+
+                # Charge.ChargeLimits or Charge.ChargeLimitConfiguration
+                charge_limits = signals.get("charge", {}).get("chargeLimits")
+                if charge_limits:
+                    webhook_data_store.append({
+                        "timestamp": data.get("deliveryTime"),
+                        "vehicle_id": vehicle_id,
+                        "event_type": "Charge.ChargeLimits",
+                        "data": charge_limits,
+                        "raw_data": data
+                    })
+
+            # Keep only the last 100 entries
+            if len(webhook_data_store) > 100:
+                webhook_data_store = webhook_data_store[-100:]
+
+            return {'status': 'success', 'message': 'Batch payload processed'}, 200
+
+        # Fallback: handle as individual event (existing logic)
+        # Get the webhook data
         # Check if this is a verification request
         if data.get('eventName') == 'verify':
             return handle_verification(data)
@@ -600,6 +668,38 @@ def get_all_vehicles():
         'total_entries': len(webhook_data_store)
     }
 
+@app.route('/api/vehicle/<vehicle_id>/latest-signals')
+def get_latest_signals(vehicle_id):
+    global webhook_data_store
+
+    # Define the event types you want to fetch
+    event_types = [
+        'Location.PreciseLocation',
+        'Odometer.TraveledDistance',
+        'TractionBattery.StateOfCharge',
+        'TractionBattery.NominalCapacity',
+        'Charge.ChargeLimits'  # If you want Charge.ChargeLimitConfiguration, use that string
+    ]
+
+    latest_signals = {}
+
+    for event_type in event_types:
+        # Find the latest entry for this event type and vehicle
+        entries = [
+            entry for entry in webhook_data_store
+            if entry['vehicle_id'] == vehicle_id and entry['event_type'] == event_type
+        ]
+        if entries:
+            latest_entry = entries[-1]  # Assuming entries are in chronological order
+            latest_signals[event_type] = {
+                'timestamp': latest_entry['timestamp'],
+                'data': latest_entry['data']
+            }
+        else:
+            latest_signals[event_type] = None  # Or you can omit this key if preferred
+
+    return latest_signals
+
 def handle_verification(data):
     try:
         challenge = data.get('payload', {}).get('challenge')
@@ -627,6 +727,35 @@ def handle_verification(data):
     except Exception as e:
         print(f"Error handling verification: {str(e)}")
         return {'error': str(e)}, 500
+
+def extract_signals_from_entry(entry):
+    signals = entry['data'].get('signals', {})
+    result = {}
+    # Location
+    if 'location' in signals and 'preciseLocation' in signals['location']:
+        result['Location.PreciseLocation'] = [ { 'data': signals['location']['preciseLocation'] } ]
+    # Odometer
+    if 'odometer' in signals and 'traveledDistance' in signals['odometer']:
+        result['Odometer.TraveledDistance'] = [ { 'data': signals['odometer']['traveledDistance'] } ]
+    # State of Charge
+    if 'tractionBattery' in signals and 'stateOfCharge' in signals['tractionBattery']:
+        result['TractionBattery.StateOfCharge'] = [ { 'data': signals['tractionBattery']['stateOfCharge'] } ]
+    # Nominal Capacity
+    if 'tractionBattery' in signals and 'nominalCapacity' in signals['tractionBattery']:
+        result['TractionBattery.NominalCapacity'] = [ { 'data': signals['tractionBattery']['nominalCapacity'] } ]
+    # Charge Limits
+    if 'charge' in signals and 'chargeLimits' in signals['charge']:
+        result['Charge.ChargeLimits'] = [ { 'data': signals['charge']['chargeLimits'] } ]
+    return result
+
+@app.route('/api/vehicle/<vehicle_id>/signals-preview')
+def signals_preview(vehicle_id):
+    global webhook_data_store
+    # Find the latest batch entry for this vehicle
+    for entry in reversed(webhook_data_store):
+        if entry['vehicle_id'] == vehicle_id and 'signals' in entry.get('data', {}):
+            return extract_signals_from_entry(entry)
+    return {'error': 'No batch signal data found for this vehicle'}, 404
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8000) 
