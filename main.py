@@ -376,7 +376,6 @@ def webhook():
         }
         
         # Add to global store (keep last 100 entries)
-        global webhook_data_store
         webhook_data_store.append(webhook_entry)
         if len(webhook_data_store) > 100:
             webhook_data_store = webhook_data_store[-100:]
