@@ -167,6 +167,7 @@ def vehicle():
         info = vehicle.info()
         print(f"Vehicle info: {info}")
         
+        # --- Location ---
         location_from_webhook = None
         for entry in reversed(webhook_data_store):
             if entry.get('vehicle_id') == vehicle_id and entry.get('event_type') == 'Location.PreciseLocation':
@@ -190,6 +191,7 @@ def vehicle():
                 print(f"Error getting location: {str(e)}")
                 location_info = "<p><strong>Location:</strong> Error retrieving location</p>"
         
+        # --- Odometer ---
         odometer_from_webhook = None
         for entry in reversed(webhook_data_store):
             if entry.get('vehicle_id') == vehicle_id and entry.get('event_type') == 'Odometer.TraveledDistance':
@@ -197,20 +199,55 @@ def vehicle():
                 break
         
         if odometer_from_webhook:
-            distance = odometer_from_webhook.get('distance', 'N/A')
+            distance = odometer_from_webhook.get('distance', odometer_from_webhook.get('value', 'N/A'))
             odometer_info = f"<p><strong>Odometer:</strong> {distance} km (from webhook)</p>"
         else:
             try:
                 print("Getting vehicle odometer...")
                 odometer = vehicle.odometer()
                 print(f"Odometer response: {odometer}")
-                odometer_info = f"<p><strong>Odometer:</strong> {odometer.get('data', {}).get('distance', 'N/A')} km (from API)</p>"
+                odometer_info = f"<p><strong>Odometer:</strong> {odometer.get('data', {}).get('distance', odometer.get('data', {}).get('value', 'N/A'))} km (from API)</p>"
             except smartcar.exceptions.RateLimitingException as e:
                 print(f"Rate limiting error: {str(e)}")
                 odometer_info = f"<p><strong>Odometer:</strong> Rate limited - please try again later</p>"
             except Exception as e:
                 print(f"Error getting odometer: {str(e)}")
                 odometer_info = "<p><strong>Odometer:</strong> Error retrieving odometer</p>"
+        
+        # --- TractionBattery.StateOfCharge ---
+        soc_from_webhook = None
+        for entry in reversed(webhook_data_store):
+            if entry.get('vehicle_id') == vehicle_id and entry.get('event_type') == 'TractionBattery.StateOfCharge':
+                soc_from_webhook = entry.get('data', {})
+                break
+        if soc_from_webhook:
+            soc_value = soc_from_webhook.get('percentage', soc_from_webhook.get('value', 'N/A'))
+            soc_info = f"<p><strong>State of Charge:</strong> {soc_value}% (from webhook)</p>"
+        else:
+            soc_info = "<p><strong>State of Charge:</strong> N/A</p>"
+        
+        # --- TractionBattery.NominalCapacity ---
+        capacity_from_webhook = None
+        for entry in reversed(webhook_data_store):
+            if entry.get('vehicle_id') == vehicle_id and entry.get('event_type') == 'TractionBattery.NominalCapacity':
+                capacity_from_webhook = entry.get('data', {})
+                break
+        if capacity_from_webhook:
+            capacity_value = capacity_from_webhook.get('capacity', 'N/A')
+            capacity_info = f"<p><strong>Nominal Capacity:</strong> {capacity_value} kWh (from webhook)</p>"
+        else:
+            capacity_info = "<p><strong>Nominal Capacity:</strong> N/A</p>"
+        
+        # --- Charge.ChargeLimits or Charge.ChargeLimitConfiguration ---
+        charge_limits_from_webhook = None
+        for entry in reversed(webhook_data_store):
+            if entry.get('vehicle_id') == vehicle_id and (entry.get('event_type') == 'Charge.ChargeLimits' or entry.get('event_type') == 'Charge.ChargeLimitConfiguration'):
+                charge_limits_from_webhook = entry.get('data', {})
+                break
+        if charge_limits_from_webhook:
+            charge_limits_info = f"<p><strong>Charge Limits:</strong> {charge_limits_from_webhook} (from webhook)</p>"
+        else:
+            charge_limits_info = "<p><strong>Charge Limits:</strong> N/A</p>"
         
         content = f'''
         <h2>Vehicle Information</h2>
@@ -231,7 +268,18 @@ def vehicle():
             <h3>Odometer</h3>
             {odometer_info}
         </div>
-        
+        <div class="info">
+            <h3>State of Charge</h3>
+            {soc_info}
+        </div>
+        <div class="info">
+            <h3>Nominal Capacity</h3>
+            {capacity_info}
+        </div>
+        <div class="info">
+            <h3>Charge Limits</h3>
+            {charge_limits_info}
+        </div>
         <a href="/" class="btn">Back to Home</a>
         '''
         
