@@ -804,5 +804,11 @@ def signals_preview(vehicle_id):
             return extract_signals_from_entry(entry)
     return {'error': 'No batch signal data found for this vehicle'}, 404
 
+@app.route('/clear-webhook-data', methods=['POST'])
+def clear_webhook_data():
+    global webhook_data_store
+    webhook_data_store.clear()
+    return {'status': 'success', 'message': 'webhook_data_store cleared'}, 200
+
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8000) 
