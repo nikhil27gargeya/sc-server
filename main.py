@@ -19,7 +19,7 @@ client = smartcar.AuthClient(
     client_secret=os.getenv('SMARTCAR_CLIENT_SECRET'),
     redirect_uri=os.getenv('SMARTCAR_REDIRECT_URI'),
     scope=['read_vehicle_info', 'read_odometer', 'read_location', 'read_battery', 'read_charge'],
-    test_mode=True
+    test_mode=False
 )
 
 @app.route('/')
