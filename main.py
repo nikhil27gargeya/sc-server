@@ -1,26 +1,197 @@
 import os
 import smartcar
-from smartcar import exceptions
-from flask import Flask, request, redirect, session, render_template
+from smartcar import exception
+from flask import Flask, request, redirect, session, render_template, jsonify
 from dotenv import load_dotenv
 import hmac
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
+import json
 
-webhook_data_store = []
+# Import database models
+from models import db, User, Vehicle, WebhookData, UserSession
 
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY')
+if not app.secret_key:
+    raise ValueError("SECRET_KEY environment variable is required")
+
+# Database configuration - PostgreSQL only
+database_url = os.getenv('DATABASE_URL')
+if not database_url:
+    raise ValueError("DATABASE_URL environment variable is required")
+
+# Render provides DATABASE_URL for PostgreSQL
+if database_url.startswith('postgres://'):
+    database_url = database_url.replace('postgres://', 'postgresql://', 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Initialize database
+db.init_app(app)
+
+# Validate Smartcar configuration
+smartcar_client_id = os.getenv('SMARTCAR_CLIENT_ID')
+smartcar_client_secret = os.getenv('SMARTCAR_CLIENT_SECRET')
+smartcar_redirect_uri = os.getenv('SMARTCAR_REDIRECT_URI')
+
+if not smartcar_client_id or not smartcar_client_secret or not smartcar_redirect_uri:
+    raise ValueError("SMARTCAR_CLIENT_ID, SMARTCAR_CLIENT_SECRET, and SMARTCAR_REDIRECT_URI environment variables are required")
 
 client = smartcar.AuthClient(
-    client_id=os.getenv('SMARTCAR_CLIENT_ID'),
-    client_secret=os.getenv('SMARTCAR_CLIENT_SECRET'),
-    redirect_uri=os.getenv('SMARTCAR_REDIRECT_URI'),
-    scope=['read_vehicle_info', 'read_odometer', 'read_location', 'read_battery', 'read_charge'],
+    client_id=smartcar_client_id,
+    client_secret=smartcar_client_secret,
+    redirect_uri=smartcar_redirect_uri,
     test_mode=False
 )
+
+# Database helper functions
+def store_access_token(vehicle_id, access_token_data):
+    """Store access token in database"""
+    try:
+        # Parse expiration time
+        from datetime import datetime, timezone
+        expiration = datetime.fromtimestamp(access_token_data['expiration'], tz=timezone.utc)
+        
+        # Check if vehicle exists
+        vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
+        
+        if vehicle:
+            # Update existing vehicle
+            vehicle.access_token = access_token_data['access_token']
+            vehicle.refresh_token = access_token_data['refresh_token']
+            vehicle.token_expires_at = expiration
+            vehicle.updated_at = datetime.utcnow()
+        else:
+            # Get or create default user
+            default_user = User.query.filter_by(smartcar_user_id='default_user').first()
+            if not default_user:
+                default_user = User(
+                    smartcar_user_id='default_user',
+                    email='default@example.com'
+                )
+                db.session.add(default_user)
+                db.session.flush()  # Get the ID
+            
+            # Create new vehicle
+            vehicle = Vehicle(
+                smartcar_vehicle_id=vehicle_id,
+                access_token=access_token_data['access_token'],
+                refresh_token=access_token_data['refresh_token'],
+                token_expires_at=expiration,
+                user_id=default_user.id
+            )
+            db.session.add(vehicle)
+        
+        db.session.commit()
+        print(f"Stored access token for vehicle {vehicle_id}")
+        return True
+    except Exception as e:
+        print(f"Error storing access token: {str(e)}")
+        db.session.rollback()
+        return False
+
+def get_access_token(vehicle_id):
+    """Get access token from database"""
+    try:
+        vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
+        if vehicle:
+            # Check if token is expired
+            from datetime import datetime, timezone
+            if vehicle.token_expires_at > datetime.now(timezone.utc):
+                return {
+                    'access_token': vehicle.access_token,
+                    'refresh_token': vehicle.refresh_token,
+                    'expiration': vehicle.token_expires_at.timestamp()
+                }
+            else:
+                # Token expired, try to refresh
+                return refresh_access_token_db(vehicle.refresh_token, vehicle_id)
+        return None
+    except Exception as e:
+        print(f"Error getting access token: {str(e)}")
+        return None
+
+def refresh_access_token_db(refresh_token, vehicle_id):
+    """Refresh access token and update database"""
+    try:
+        new_token = client.refresh_token(refresh_token)
+        if new_token:
+            store_access_token(vehicle_id, new_token)
+            return new_token
+        return None
+    except Exception as e:
+        print(f"Error refreshing token in database: {str(e)}")
+        return None
+
+def store_webhook_data(vehicle_id, event_type, data, raw_data=None, timestamp=None):
+    """Store webhook data in database"""
+    try:
+        if timestamp is None:
+            timestamp = datetime.now()
+        
+        # Find vehicle by smartcar_vehicle_id
+        vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
+        if not vehicle:
+            print(f"Vehicle {vehicle_id} not found in database")
+            return False
+        
+        webhook_entry = WebhookData(
+            vehicle_id=vehicle.id,
+            event_type=event_type,
+            timestamp=timestamp,
+            data=json.dumps(data),
+            raw_data=json.dumps(raw_data) if raw_data else None
+        )
+        
+        db.session.add(webhook_entry)
+        db.session.commit()
+        print(f"Stored webhook data for vehicle {vehicle_id}, event {event_type}")
+        return True
+    except Exception as e:
+        print(f"Error storing webhook data: {str(e)}")
+        db.session.rollback()
+        return False
+
+def get_webhook_data(vehicle_id=None, event_type=None, limit=100):
+    """Get webhook data from database"""
+    try:
+        query = WebhookData.query
+        
+        if vehicle_id:
+            vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
+            if vehicle:
+                query = query.filter_by(vehicle_id=vehicle.id)
+        
+        if event_type:
+            query = query.filter_by(event_type=event_type)
+        
+        entries = query.order_by(WebhookData.timestamp.desc()).limit(limit).all()
+        return [entry.to_dict() for entry in entries]
+    except Exception as e:
+        print(f"Error getting webhook data: {str(e)}")
+        return []
+
+def get_latest_webhook_data(vehicle_id, event_type):
+    """Get latest webhook data for specific vehicle and event type"""
+    try:
+        vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
+        if not vehicle:
+            return None
+        
+        entry = WebhookData.query.filter_by(
+            vehicle_id=vehicle.id,
+            event_type=event_type
+        ).order_by(WebhookData.timestamp.desc()).first()
+        
+        return entry.to_dict() if entry else None
+    except Exception as e:
+        print(f"Error getting latest webhook data: {str(e)}")
+        return None
 
 @app.route('/')
 def index():
@@ -37,69 +208,7 @@ def login():
     auth_url = client.get_auth_url()
     return redirect(auth_url)
 
-def refresh_access_token(refresh_token):
-    """Refresh the access token using the refresh token"""
-    try:
-        new_token = client.refresh_token(refresh_token)
-        print(f"Token refreshed successfully: {new_token}")
-        return new_token
-    except Exception as e:
-        print(f"Error refreshing token: {str(e)}")
-        return None
-
-def is_token_expired(token_data):
-    """Check if the access token is expired"""
-    if not token_data or not isinstance(token_data, dict):
-        return True
-    
-    expiration = token_data.get('expiration')
-    if not expiration:
-        return True
-    
-    # Add 5 minute buffer to refresh before actual expiration
-    from datetime import datetime, timezone, timedelta
-    buffer_time = datetime.now(timezone.utc) + timedelta(minutes=5)
-    return expiration < buffer_time
-
-def get_valid_access_token():
-    """Get a valid access token, refreshing if necessary"""
-    token_data = session.get('access_token')
-    
-    print(f"Current token data: {token_data}")
-    
-    if not token_data:
-        print("No token data found in session")
-        return None
-    
-    # If token_data is a string (old format), convert to dict
-    if isinstance(token_data, str):
-        print("Token is in old string format, cannot refresh")
-        # We can't refresh without the full token object, so return None
-        return None
-    
-    # Check if token is expired
-    if is_token_expired(token_data):
-        print("Token is expired, attempting to refresh...")
-        refresh_token = token_data.get('refresh_token')
-        if refresh_token:
-            new_token = refresh_access_token(refresh_token)
-            if new_token:
-                session['access_token'] = new_token
-                print("Token refreshed successfully")
-                return new_token.get('access_token')
-            else:
-                # Refresh failed, clear session
-                print("Token refresh failed, clearing session")
-                session.pop('access_token', None)
-                return None
-        else:
-            # No refresh token, clear session
-            print("No refresh token available, clearing session")
-            session.pop('access_token', None)
-            return None
-    
-    print("Token is valid")
-    return token_data.get('access_token')
+# Database-only token management - no session fallback
 
 @app.route('/exchange')
 def exchange():
@@ -114,8 +223,33 @@ def exchange():
         
         print(f"Received access token: {access_token}")
         
-        session['access_token'] = access_token
-        print(f"Stored full token object in session")
+        # Store in database only - no session storage
+        print(f"Storing token in database only")
+        
+        # Get vehicle info to store in database
+        try:
+            vehicle_ids = smartcar.get_vehicle_ids(access_token['access_token'])
+            if vehicle_ids['vehicles']:
+                vehicle_id = vehicle_ids['vehicles'][0]
+                
+                # Get vehicle details
+                vehicle = smartcar.Vehicle(vehicle_id, access_token['access_token'])
+                vehicle_info = vehicle.info()
+                
+                # Store token in database
+                store_access_token(vehicle_id, access_token)
+                
+                # Update vehicle info in database
+                db_vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
+                if db_vehicle:
+                    db_vehicle.make = vehicle_info.get('make')
+                    db_vehicle.model = vehicle_info.get('model')
+                    db_vehicle.year = vehicle_info.get('year')
+                    db.session.commit()
+                    print(f"Updated vehicle info for {vehicle_id}")
+                
+        except Exception as e:
+            print(f"Error storing vehicle info in database: {str(e)}")
         
         content = '''
         <div class="success">
@@ -133,12 +267,34 @@ def exchange():
 @app.route('/vehicle')
 def vehicle():
     try:
-        # Get a valid access token (with automatic refresh if needed)
-        access_token = get_valid_access_token()
+        # First try to get token from database
+        db_vehicles = Vehicle.query.all()
+        access_token = None
+        vehicle_id = None
+        
+        if db_vehicles:
+            # Use the first vehicle in database
+            db_vehicle = db_vehicles[0]
+            vehicle_id = db_vehicle.smartcar_vehicle_id
+            token_data = get_access_token(vehicle_id)
+            if token_data:
+                access_token = token_data['access_token']
+                print(f"Using database token for vehicle {vehicle_id}")
+        
+        # No fallback - require database tokens
+        if not access_token:
+            content = '''
+            <div class="error">
+                <h3>No Vehicle Connected</h3>
+                <p>No vehicles found in database. Please connect a vehicle first.</p>
+                <a href="/login" class="btn">Connect Vehicle</a>
+            </div>
+            '''
+            return render_template('base.html', content=content)
         
         print(f"Session keys: {list(session.keys())}")
         
-        if not access_token:
+        if not access_token or not vehicle_id:
             content = '''
             <div class="error">
                 <h3>Authentication Required</h3>
@@ -149,16 +305,6 @@ def vehicle():
             return render_template('base.html', content=content)
         
         print(f"Using access token: {access_token}")
-        
-        print("Getting vehicle IDs...")
-        vehicle_ids = smartcar.get_vehicle_ids(access_token)
-        print(f"Vehicle IDs response: {vehicle_ids}")
-        
-        if not vehicle_ids['vehicles']:
-            content = '<div class="error">No vehicles found for this user</div>'
-            return render_template('base.html', content=content)
-        
-        vehicle_id = vehicle_ids['vehicles'][0]
         print(f"Using vehicle ID: {vehicle_id}")
         
         vehicle = smartcar.Vehicle(vehicle_id, access_token)
@@ -168,15 +314,12 @@ def vehicle():
         print(f"Vehicle info: {info}")
         
         # --- Location ---
-        location_from_webhook = None
-        for entry in reversed(webhook_data_store):
-            if entry.get('vehicle_id') == vehicle_id and entry.get('event_type') == 'Location.PreciseLocation':
-                location_from_webhook = entry.get('data', {})
-                break
+        location_from_webhook = get_latest_webhook_data(vehicle_id, 'Location.PreciseLocation')
         
         if location_from_webhook:
-            lat = location_from_webhook.get('latitude', 'N/A')
-            lng = location_from_webhook.get('longitude', 'N/A')
+            location_data = location_from_webhook['data']
+            lat = location_data.get('latitude', 'N/A')
+            lng = location_data.get('longitude', 'N/A')
             location_info = f"<p><strong>Location:</strong> {lat}, {lng} (from webhook)</p>"
         else:
             try:
@@ -184,7 +327,7 @@ def vehicle():
                 location = vehicle.location()
                 print(f"Location response: {location}")
                 location_info = f"<p><strong>Location:</strong> {location.get('data', {}).get('latitude', 'N/A')}, {location.get('data', {}).get('longitude', 'N/A')} (from API)</p>"
-            except smartcar.exceptions.RateLimitingException as e:
+            except smartcar.exception.RateLimitingException as e:
                 print(f"Rate limiting error: {str(e)}")
                 location_info = f"<p><strong>Location:</strong> Rate limited - please try again later</p>"
             except Exception as e:
@@ -192,14 +335,11 @@ def vehicle():
                 location_info = "<p><strong>Location:</strong> Error retrieving location</p>"
         
         # --- Odometer ---
-        odometer_from_webhook = None
-        for entry in reversed(webhook_data_store):
-            if entry.get('vehicle_id') == vehicle_id and entry.get('event_type') == 'Odometer.TraveledDistance':
-                odometer_from_webhook = entry.get('data', {})
-                break
+        odometer_from_webhook = get_latest_webhook_data(vehicle_id, 'Odometer.TraveledDistance')
         
         if odometer_from_webhook:
-            distance = odometer_from_webhook.get('distance', odometer_from_webhook.get('value', 'N/A'))
+            odometer_data = odometer_from_webhook['data']
+            distance = odometer_data.get('distance', odometer_data.get('value', 'N/A'))
             odometer_info = f"<p><strong>Odometer:</strong> {distance} km (from webhook)</p>"
         else:
             try:
@@ -207,7 +347,7 @@ def vehicle():
                 odometer = vehicle.odometer()
                 print(f"Odometer response: {odometer}")
                 odometer_info = f"<p><strong>Odometer:</strong> {odometer.get('data', {}).get('distance', odometer.get('data', {}).get('value', 'N/A'))} km (from API)</p>"
-            except smartcar.exceptions.RateLimitingException as e:
+            except smartcar.exception.RateLimitingException as e:
                 print(f"Rate limiting error: {str(e)}")
                 odometer_info = f"<p><strong>Odometer:</strong> Rate limited - please try again later</p>"
             except Exception as e:
@@ -215,37 +355,28 @@ def vehicle():
                 odometer_info = "<p><strong>Odometer:</strong> Error retrieving odometer</p>"
         
         # --- TractionBattery.StateOfCharge ---
-        soc_from_webhook = None
-        for entry in reversed(webhook_data_store):
-            if entry.get('vehicle_id') == vehicle_id and entry.get('event_type') == 'TractionBattery.StateOfCharge':
-                soc_from_webhook = entry.get('data', {})
-                break
+        soc_from_webhook = get_latest_webhook_data(vehicle_id, 'TractionBattery.StateOfCharge')
         if soc_from_webhook:
-            soc_value = soc_from_webhook.get('percentage', soc_from_webhook.get('value', 'N/A'))
+            soc_data = soc_from_webhook['data']
+            soc_value = soc_data.get('percentage', soc_data.get('value', 'N/A'))
             soc_info = f"<p><strong>State of Charge:</strong> {soc_value}% (from webhook)</p>"
         else:
             soc_info = "<p><strong>State of Charge:</strong> N/A</p>"
         
         # --- TractionBattery.NominalCapacity ---
-        capacity_from_webhook = None
-        for entry in reversed(webhook_data_store):
-            if entry.get('vehicle_id') == vehicle_id and entry.get('event_type') == 'TractionBattery.NominalCapacity':
-                capacity_from_webhook = entry.get('data', {})
-                break
+        capacity_from_webhook = get_latest_webhook_data(vehicle_id, 'TractionBattery.NominalCapacity')
         if capacity_from_webhook:
-            capacity_value = capacity_from_webhook.get('capacity', 'N/A')
+            capacity_data = capacity_from_webhook['data']
+            capacity_value = capacity_data.get('capacity', 'N/A')
             capacity_info = f"<p><strong>Nominal Capacity:</strong> {capacity_value} kWh (from webhook)</p>"
         else:
             capacity_info = "<p><strong>Nominal Capacity:</strong> N/A</p>"
         
         # --- Charge.ChargeLimits or Charge.ChargeLimitConfiguration ---
-        charge_limits_from_webhook = None
-        for entry in reversed(webhook_data_store):
-            if entry.get('vehicle_id') == vehicle_id and (entry.get('event_type') == 'Charge.ChargeLimits' or entry.get('event_type') == 'Charge.ChargeLimitConfiguration'):
-                charge_limits_from_webhook = entry.get('data', {})
-                break
+        charge_limits_from_webhook = get_latest_webhook_data(vehicle_id, 'Charge.ChargeLimits')
         if charge_limits_from_webhook:
-            charge_limits_info = f"<p><strong>Charge Limits:</strong> {charge_limits_from_webhook} (from webhook)</p>"
+            charge_limits_data = charge_limits_from_webhook['data']
+            charge_limits_info = f"<p><strong>Charge Limits:</strong> {charge_limits_data} (from webhook)</p>"
         else:
             charge_limits_info = "<p><strong>Charge Limits:</strong> N/A</p>"
         
@@ -285,7 +416,7 @@ def vehicle():
         
         return render_template('base.html', content=content)
         
-    except smartcar.exceptions.RateLimitingException as e:
+    except smartcar.exception.RateLimitingException as e:
         print(f"Rate limiting error: {str(e)}")
         content = f'''
         <div class="error">
@@ -296,7 +427,7 @@ def vehicle():
         </div>
         '''
         return render_template('base.html', content=content)
-    except smartcar.exceptions.AuthenticationException as e:
+    except smartcar.exception.AuthenticationException as e:
         print(f"Authentication error: {str(e)}")
         # Clear the invalid token from session
         session.pop('access_token', None)
@@ -309,7 +440,7 @@ def vehicle():
         </div>
         '''
         return render_template('base.html', content=content)
-    except smartcar.exceptions.PermissionException as e:
+    except smartcar.exception.PermissionException as e:
         print(f"Permission error: {str(e)}")
         content = f'''
         <div class="error">
@@ -336,7 +467,6 @@ def vehicle():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    global webhook_data_store
     try:
         data = request.get_json()
         print(f"Received webhook data: {data}")
@@ -350,95 +480,50 @@ def webhook():
                 # Location.PreciseLocation
                 loc = signals.get("location", {}).get("preciseLocation")
                 if loc:
-                    webhook_data_store.append({
-                        "timestamp": data.get("deliveryTime"),
-                        "vehicle_id": vehicle_id,
-                        "event_type": "Location.PreciseLocation",
-                        "data": loc,
-                        "raw_data": data
-                    })
+                    store_webhook_data(vehicle_id, "Location.PreciseLocation", loc, raw_data=data)
 
                 # Odometer.TraveledDistance
                 odo = signals.get("odometer", {}).get("traveledDistance")
                 if odo:
-                    webhook_data_store.append({
-                        "timestamp": data.get("deliveryTime"),
-                        "vehicle_id": vehicle_id,
-                        "event_type": "Odometer.TraveledDistance",
-                        "data": odo,
-                        "raw_data": data
-                    })
+                    store_webhook_data(vehicle_id, "Odometer.TraveledDistance", odo, raw_data=data)
 
                 # TractionBattery.StateOfCharge
                 soc = signals.get("tractionBattery", {}).get("stateOfCharge")
                 if soc:
-                    webhook_data_store.append({
-                        "timestamp": data.get("deliveryTime"),
-                        "vehicle_id": vehicle_id,
-                        "event_type": "TractionBattery.StateOfCharge",
-                        "data": soc,
-                        "raw_data": data
-                    })
+                    store_webhook_data(vehicle_id, "TractionBattery.StateOfCharge", soc, raw_data=data)
 
                 # TractionBattery.NominalCapacity
                 cap = signals.get("tractionBattery", {}).get("nominalCapacity")
                 if cap:
-                    webhook_data_store.append({
-                        "timestamp": data.get("deliveryTime"),
-                        "vehicle_id": vehicle_id,
-                        "event_type": "TractionBattery.NominalCapacity",
-                        "data": cap,
-                        "raw_data": data
-                    })
+                    store_webhook_data(vehicle_id, "TractionBattery.NominalCapacity", cap, raw_data=data)
 
                 # Charge.ChargeLimits or Charge.ChargeLimitConfiguration
                 charge_limits = signals.get("charge", {}).get("chargeLimits")
                 if charge_limits:
-                    webhook_data_store.append({
-                        "timestamp": data.get("deliveryTime"),
-                        "vehicle_id": vehicle_id,
-                        "event_type": "Charge.ChargeLimits",
-                        "data": charge_limits,
-                        "raw_data": data
-                    })
+                    store_webhook_data(vehicle_id, "Charge.ChargeLimits", charge_limits, raw_data=data)
 
-            # Keep only the last 100 entries
-            if len(webhook_data_store) > 100:
-                webhook_data_store = webhook_data_store[-100:]
+            # Database automatically handles storage, no need to limit entries
 
             return {'status': 'success', 'message': 'Batch payload processed'}, 200
 
         # Fallback: handle as individual event (existing logic)
-        # Get the webhook data
         # Check if this is a verification request
         if data.get('eventName') == 'verify':
             return handle_verification(data)
         
         # Store the webhook data with timestamp
-        webhook_entry = {
-            'timestamp': datetime.now().isoformat(),
-            'vehicle_id': data.get('vehicleId'),
-            'event_type': data.get('eventType'),
-            'data': data.get('data', {}),
-            'raw_data': data
-        }
-        
-        # Add to global store (keep last 100 entries)
-        webhook_data_store.append(webhook_entry)
-        if len(webhook_data_store) > 100:
-            webhook_data_store = webhook_data_store[-100:]
-        
-        print(f"Stored webhook data. Total entries: {len(webhook_data_store)}")
-        
-        # Process the webhook data
         vehicle_id = data.get('vehicleId')
         event_type = data.get('eventType')
-        timestamp = data.get('timestamp')
+        event_data = data.get('data', {})
+        
+        # Store in database
+        store_webhook_data(vehicle_id, event_type, event_data, raw_data=data)
+        
+        print(f"Stored individual webhook data for vehicle {vehicle_id}, event {event_type}")
         
         # Log the webhook for debugging
         print(f"Vehicle ID: {vehicle_id}")
         print(f"Event Type: {event_type}")
-        print(f"Timestamp: {timestamp}")
         
         # Handle different event types
         if event_type == 'vehicle.location':
@@ -493,26 +578,33 @@ def webhook():
 def webhook_data():
     """Display webhook data dashboard"""
     try:
-        global webhook_data_store
         import json
+        # Get webhook data from database
+        webhook_entries = get_webhook_data(limit=50)
+        
         # Create HTML for webhook entries
         webhook_entries_html = ""
-        for entry in reversed(webhook_data_store):  # Show newest first
+        for entry in webhook_entries:  # Already ordered by newest first
             try:
                 data_str = json.dumps(entry.get('data', {}), indent=2)
             except Exception:
                 data_str = str(entry.get('data', {}))
+            
+            # Get vehicle info
+            vehicle = Vehicle.query.get(entry.get('vehicle_id'))
+            vehicle_id_display = vehicle.smartcar_vehicle_id if vehicle else 'Unknown'
+            
             webhook_entries_html += f'''
             <div class="webhook-entry" style="border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 5px;">
                 <h4>Event: {entry.get('event_type', 'N/A')}</h4>
-                <p><strong>Vehicle ID:</strong> {entry.get('vehicle_id', 'N/A')}</p>
+                <p><strong>Vehicle ID:</strong> {vehicle_id_display}</p>
                 <p><strong>Timestamp:</strong> {entry.get('timestamp', 'N/A')}</p>
                 <p><strong>Data:</strong></p>
                 <pre style="background: #f5f5f5; padding: 10px; border-radius: 3px; overflow-x: auto;">{data_str}</pre>
             </div>
             '''
 
-        if not webhook_data_store:
+        if not webhook_entries:
             webhook_entries_html = '<p style="color: #666;">No webhook data received yet. Send some test requests to see data here.</p>'
 
         content = f'''
@@ -551,17 +643,11 @@ def webhook_data():
 @app.route('/api/vehicle/<vehicle_id>/location')
 def get_vehicle_location(vehicle_id):
     """Get location data for a specific vehicle"""
-    global webhook_data_store
+    latest_location = get_latest_webhook_data(vehicle_id, 'Location.PreciseLocation')
     
-    location_entries = [
-        entry for entry in webhook_data_store 
-        if entry['vehicle_id'] == vehicle_id and entry['event_type'] == 'Location.PreciseLocation'
-    ]
-    
-    if not location_entries:
+    if not latest_location:
         return {'error': 'No location data found for this vehicle'}, 404
     
-    latest_location = location_entries[-1]
     return {
         'vehicle_id': vehicle_id,
         'timestamp': latest_location['timestamp'],
@@ -571,124 +657,96 @@ def get_vehicle_location(vehicle_id):
 @app.route('/api/vehicle/<vehicle_id>/battery')
 def get_vehicle_battery(vehicle_id):
     """Get battery data for a specific vehicle"""
-    global webhook_data_store
+    soc_data = get_latest_webhook_data(vehicle_id, 'TractionBattery.StateOfCharge')
+    capacity_data = get_latest_webhook_data(vehicle_id, 'TractionBattery.NominalCapacity')
     
-    battery_entries = [
-        entry for entry in webhook_data_store 
-        if entry['vehicle_id'] == vehicle_id and entry['event_type'] in ['TractionBattery.StateOfCharge', 'TractionBattery.NominalCapacity']
-    ]
-    
-    if not battery_entries:
+    if not soc_data and not capacity_data:
         return {'error': 'No battery data found for this vehicle'}, 404
     
     battery_data = {}
-    for entry in battery_entries:
-        if entry['event_type'] == 'TractionBattery.StateOfCharge':
-            battery_data['state_of_charge'] = entry['data']
-        elif entry['event_type'] == 'TractionBattery.NominalCapacity':
-            battery_data['nominal_capacity'] = entry['data']
+    latest_timestamp = None
+    
+    if soc_data:
+        battery_data['state_of_charge'] = soc_data['data']
+        latest_timestamp = soc_data['timestamp']
+    
+    if capacity_data:
+        battery_data['nominal_capacity'] = capacity_data['data']
+        if not latest_timestamp or capacity_data['timestamp'] > latest_timestamp:
+            latest_timestamp = capacity_data['timestamp']
     
     return {
         'vehicle_id': vehicle_id,
-        'timestamp': battery_entries[-1]['timestamp'],
+        'timestamp': latest_timestamp,
         'battery': battery_data
     }
 
 @app.route('/api/vehicle/<vehicle_id>/battery/state-of-charge')
 def get_vehicle_battery_state_of_charge(vehicle_id):
     """Get battery state of charge for a specific vehicle"""
-    global webhook_data_store
+    soc_data = get_latest_webhook_data(vehicle_id, 'TractionBattery.StateOfCharge')
     
-    soc_entries = [
-        entry for entry in webhook_data_store 
-        if entry['vehicle_id'] == vehicle_id and entry['event_type'] == 'TractionBattery.StateOfCharge'
-    ]
-    
-    if not soc_entries:
+    if not soc_data:
         return {'error': 'No battery state of charge data found for this vehicle'}, 404
     
-    latest_soc = soc_entries[-1]
     return {
         'vehicle_id': vehicle_id,
-        'timestamp': latest_soc['timestamp'],
-        'state_of_charge': latest_soc['data']
+        'timestamp': soc_data['timestamp'],
+        'state_of_charge': soc_data['data']
     }
 
 @app.route('/api/vehicle/<vehicle_id>/battery/capacity')
 def get_vehicle_battery_capacity(vehicle_id):
     """Get battery nominal capacity for a specific vehicle"""
-    global webhook_data_store
+    capacity_data = get_latest_webhook_data(vehicle_id, 'TractionBattery.NominalCapacity')
     
-    capacity_entries = [
-        entry for entry in webhook_data_store 
-        if entry['vehicle_id'] == vehicle_id and entry['event_type'] == 'TractionBattery.NominalCapacity'
-    ]
-    
-    if not capacity_entries:
+    if not capacity_data:
         return {'error': 'No battery capacity data found for this vehicle'}, 404
     
-    latest_capacity = capacity_entries[-1]
     return {
         'vehicle_id': vehicle_id,
-        'timestamp': latest_capacity['timestamp'],
-        'nominal_capacity': latest_capacity['data']
+        'timestamp': capacity_data['timestamp'],
+        'nominal_capacity': capacity_data['data']
     }
 
 @app.route('/api/vehicle/<vehicle_id>/odometer')
 def get_vehicle_odometer(vehicle_id):
     """Get odometer data for a specific vehicle"""
-    global webhook_data_store
+    odometer_data = get_latest_webhook_data(vehicle_id, 'Odometer.TraveledDistance')
     
-    odometer_entries = [
-        entry for entry in webhook_data_store 
-        if entry['vehicle_id'] == vehicle_id and entry['event_type'] == 'Odometer.TraveledDistance'
-    ]
-    
-    if not odometer_entries:
+    if not odometer_data:
         return {'error': 'No odometer data found for this vehicle'}, 404
     
-    latest_odometer = odometer_entries[-1]
     return {
         'vehicle_id': vehicle_id,
-        'timestamp': latest_odometer['timestamp'],
-        'odometer': latest_odometer['data']
+        'timestamp': odometer_data['timestamp'],
+        'odometer': odometer_data['data']
     }
 
 @app.route('/api/vehicle/<vehicle_id>/charge-limits')
 def get_vehicle_charge_limits(vehicle_id):
     """Get charge limits data for a specific vehicle"""
-    global webhook_data_store
+    charge_data = get_latest_webhook_data(vehicle_id, 'Charge.ChargeLimits')
     
-    charge_entries = [
-        entry for entry in webhook_data_store 
-        if entry['vehicle_id'] == vehicle_id and entry['event_type'] == 'Charge.ChargeLimits'
-    ]
-    
-    if not charge_entries:
+    if not charge_data:
         return {'error': 'No charge limits data found for this vehicle'}, 404
     
-    latest_charge = charge_entries[-1]
     return {
         'vehicle_id': vehicle_id,
-        'timestamp': latest_charge['timestamp'],
-        'charge_limits': latest_charge['data']
+        'timestamp': charge_data['timestamp'],
+        'charge_limits': charge_data['data']
     }
 
 @app.route('/api/vehicle/<vehicle_id>/all')
 def get_all_vehicle_data(vehicle_id):
-    global webhook_data_store
-    
-    vehicle_entries = [
-        entry for entry in webhook_data_store 
-        if entry['vehicle_id'] == vehicle_id
-    ]
+    vehicle_entries = get_webhook_data(vehicle_id=vehicle_id)
     
     if not vehicle_entries:
         return {'error': 'No data found for this vehicle'}, 404
     
     vehicle_data = {
         'vehicle_id': vehicle_id,
-        'last_updated': vehicle_entries[-1]['timestamp'],
+        'last_updated': vehicle_entries[0]['timestamp'] if vehicle_entries else None,
         'data': {}
     }
     
@@ -705,20 +763,20 @@ def get_all_vehicle_data(vehicle_id):
 
 @app.route('/api/vehicles')
 def get_all_vehicles():
-    global webhook_data_store
+    vehicles = Vehicle.query.all()
+    vehicle_ids = [vehicle.smartcar_vehicle_id for vehicle in vehicles]
     
-    vehicle_ids = list(set([entry['vehicle_id'] for entry in webhook_data_store]))
+    # Get total webhook entries
+    total_entries = WebhookData.query.count()
     
     return {
         'vehicles': vehicle_ids,
         'total_vehicles': len(vehicle_ids),
-        'total_entries': len(webhook_data_store)
+        'total_entries': total_entries
     }
 
 @app.route('/api/vehicle/<vehicle_id>/latest-signals')
 def get_latest_signals(vehicle_id):
-    global webhook_data_store
-
     # Define the event types you want to fetch
     event_types = [
         'Location.PreciseLocation',
@@ -731,13 +789,8 @@ def get_latest_signals(vehicle_id):
     latest_signals = {}
 
     for event_type in event_types:
-        # Find the latest entry for this event type and vehicle
-        entries = [
-            entry for entry in webhook_data_store
-            if entry['vehicle_id'] == vehicle_id and entry['event_type'] == event_type
-        ]
-        if entries:
-            latest_entry = entries[-1]  # Assuming entries are in chronological order
+        latest_entry = get_latest_webhook_data(vehicle_id, event_type)
+        if latest_entry:
             latest_signals[event_type] = {
                 'timestamp': latest_entry['timestamp'],
                 'data': latest_entry['data']
@@ -760,6 +813,10 @@ def handle_verification(data):
         if not management_token:
             print("Error: SMARTCAR_MANAGEMENT_TOKEN not found in environment variables")
             return {'error': 'Management token not configured'}, 500
+        
+        if not challenge:
+            print("Error: No challenge found in verification request")
+            return {'error': 'No challenge provided'}, 400
         
         hmac_hash = hmac.new(
             management_token.encode('utf-8'),
@@ -797,18 +854,27 @@ def extract_signals_from_entry(entry):
 
 @app.route('/api/vehicle/<vehicle_id>/signals-preview')
 def signals_preview(vehicle_id):
-    global webhook_data_store
     # Find the latest batch entry for this vehicle
-    for entry in reversed(webhook_data_store):
-        if entry['vehicle_id'] == vehicle_id and 'signals' in entry.get('data', {}):
-            return extract_signals_from_entry(entry)
+    vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
+    if not vehicle:
+        return {'error': 'Vehicle not found'}, 404
+    
+    latest_batch = WebhookData.query.filter_by(
+        vehicle_id=vehicle.id
+    ).order_by(WebhookData.timestamp.desc()).first()
+    
+    if latest_batch and 'signals' in latest_batch.data_dict:
+        return extract_signals_from_entry(latest_batch.to_dict())
+    
     return {'error': 'No batch signal data found for this vehicle'}, 404
 
 @app.route('/clear-webhook-data', methods=['POST'])
 def clear_webhook_data():
-    global webhook_data_store
-    webhook_data_store.clear()
-    return {'status': 'success', 'message': 'webhook_data_store cleared'}, 200
-
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=8000) 
+    try:
+        # Clear all webhook data from database
+        WebhookData.query.delete()
+        db.session.commit()
+        return {'status': 'success', 'message': 'All webhook data cleared from database'}, 200
+    except Exception as e:
+        db.session.rollback()
+        return {'status': 'error', 'message': str(e)}, 500
