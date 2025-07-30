@@ -1,6 +1,6 @@
 import os
 import smartcar
-from smartcar import exception
+from smartcar import exceptions
 from flask import Flask, request, redirect, session, render_template, jsonify
 from dotenv import load_dotenv
 import hmac
@@ -327,7 +327,7 @@ def vehicle():
                 location = vehicle.location()
                 print(f"Location response: {location}")
                 location_info = f"<p><strong>Location:</strong> {location.get('data', {}).get('latitude', 'N/A')}, {location.get('data', {}).get('longitude', 'N/A')} (from API)</p>"
-            except smartcar.exception.RateLimitingException as e:
+            except smartcar.exceptions.RateLimitingException as e:
                 print(f"Rate limiting error: {str(e)}")
                 location_info = f"<p><strong>Location:</strong> Rate limited - please try again later</p>"
             except Exception as e:
@@ -347,7 +347,7 @@ def vehicle():
                 odometer = vehicle.odometer()
                 print(f"Odometer response: {odometer}")
                 odometer_info = f"<p><strong>Odometer:</strong> {odometer.get('data', {}).get('distance', odometer.get('data', {}).get('value', 'N/A'))} km (from API)</p>"
-            except smartcar.exception.RateLimitingException as e:
+            except smartcar.exceptions.RateLimitingException as e:
                 print(f"Rate limiting error: {str(e)}")
                 odometer_info = f"<p><strong>Odometer:</strong> Rate limited - please try again later</p>"
             except Exception as e:
@@ -416,7 +416,7 @@ def vehicle():
         
         return render_template('base.html', content=content)
         
-    except smartcar.exception.RateLimitingException as e:
+    except smartcar.exceptions.RateLimitingException as e:
         print(f"Rate limiting error: {str(e)}")
         content = f'''
         <div class="error">
@@ -427,7 +427,7 @@ def vehicle():
         </div>
         '''
         return render_template('base.html', content=content)
-    except smartcar.exception.AuthenticationException as e:
+    except smartcar.exceptions.AuthenticationException as e:
         print(f"Authentication error: {str(e)}")
         # Clear the invalid token from session
         session.pop('access_token', None)
@@ -440,7 +440,7 @@ def vehicle():
         </div>
         '''
         return render_template('base.html', content=content)
-    except smartcar.exception.PermissionException as e:
+    except smartcar.exceptions.PermissionException as e:
         print(f"Permission error: {str(e)}")
         content = f'''
         <div class="error">
