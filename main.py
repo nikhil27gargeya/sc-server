@@ -473,7 +473,7 @@ def webhook():
         data = request.get_json()
         print(f"Received webhook data: {data}")
 
-        # Check for batch payload (VehicleState type)
+        # Check for batch payload (VehicleState type) - old format
         if data.get("type") == "VehicleState" and "data" in data and "vehicles" in data["data"]:
             for vehicle in data["data"]["vehicles"]:
                 vehicle_id = vehicle.get("vehicleId")
@@ -504,9 +504,41 @@ def webhook():
                 if charge_limits:
                     store_webhook_data(vehicle_id, "Charge.ChargeLimits", charge_limits, raw_data=data)
 
-            # Database automatically handles storage, no need to limit entries
-
             return {'status': 'success', 'message': 'Batch payload processed'}, 200
+
+        # Check for new VEHICLE_STATE format with signals array
+        elif data.get("eventType") == "VEHICLE_STATE" and "data" in data and "signals" in data["data"]:
+            vehicle_id = data["data"]["vehicle"]["id"]
+            signals = data["data"]["signals"]
+            
+            print(f"Processing VEHICLE_STATE payload for vehicle {vehicle_id}")
+            
+            for signal in signals:
+                signal_code = signal.get("code", "")
+                signal_body = signal.get("body", {})
+                
+                # Map signal codes to event types
+                if signal_code == "location-preciselocation":
+                    store_webhook_data(vehicle_id, "Location.PreciseLocation", signal_body, raw_data=data)
+                    print(f"Stored Location.PreciseLocation for vehicle {vehicle_id}")
+                    
+                elif signal_code == "odometer-traveleddistance":
+                    store_webhook_data(vehicle_id, "Odometer.TraveledDistance", signal_body, raw_data=data)
+                    print(f"Stored Odometer.TraveledDistance for vehicle {vehicle_id}")
+                    
+                elif signal_code == "tractionbattery-stateofcharge":
+                    store_webhook_data(vehicle_id, "TractionBattery.StateOfCharge", signal_body, raw_data=data)
+                    print(f"Stored TractionBattery.StateOfCharge for vehicle {vehicle_id}")
+                    
+                elif signal_code == "tractionbattery-nominalcapacity":
+                    store_webhook_data(vehicle_id, "TractionBattery.NominalCapacity", signal_body, raw_data=data)
+                    print(f"Stored TractionBattery.NominalCapacity for vehicle {vehicle_id}")
+                    
+                elif signal_code == "charge-chargelimits":
+                    store_webhook_data(vehicle_id, "Charge.ChargeLimits", signal_body, raw_data=data)
+                    print(f"Stored Charge.ChargeLimits for vehicle {vehicle_id}")
+            
+            return {'status': 'success', 'message': 'VEHICLE_STATE payload processed'}, 200
 
         # Fallback: handle as individual event (existing logic)
         # Check if this is a verification request
