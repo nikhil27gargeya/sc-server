@@ -139,8 +139,28 @@ def store_webhook_data(vehicle_id, event_type, data, raw_data=None, timestamp=No
         # Find vehicle by smartcar_vehicle_id
         vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
         if not vehicle:
-            print(f"Vehicle {vehicle_id} not found in database")
-            return False
+            print(f"Vehicle {vehicle_id} not found in database, creating placeholder vehicle")
+            # Create a placeholder vehicle for webhook data
+            default_user = User.query.filter_by(smartcar_user_id='default_user').first()
+            if not default_user:
+                default_user = User(
+                    smartcar_user_id='default_user',
+                    email='default@example.com'
+                )
+                db.session.add(default_user)
+                db.session.flush()
+            
+            # Create placeholder vehicle (without tokens since it's from webhook)
+            vehicle = Vehicle(
+                smartcar_vehicle_id=vehicle_id,
+                user_id=default_user.id,
+                access_token='placeholder',  # Will be updated when user connects
+                refresh_token='placeholder',  # Will be updated when user connects
+                token_expires_at=datetime.now()  # Will be updated when user connects
+            )
+            db.session.add(vehicle)
+            db.session.flush()  # Get the vehicle ID
+            print(f"Created placeholder vehicle {vehicle_id}")
         
         webhook_entry = WebhookData(
             vehicle_id=vehicle.id,
@@ -509,9 +529,21 @@ def webhook():
         # Check for new VEHICLE_STATE format with signals array
         elif data.get("eventType") == "VEHICLE_STATE" and "data" in data and "signals" in data["data"]:
             vehicle_id = data["data"]["vehicle"]["id"]
+            vehicle_info = data["data"]["vehicle"]
             signals = data["data"]["signals"]
             
             print(f"Processing VEHICLE_STATE payload for vehicle {vehicle_id}")
+            
+            # Update vehicle info if it exists, or create placeholder
+            vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
+            if vehicle:
+                # Update existing vehicle with info from webhook
+                vehicle.make = vehicle_info.get("make")
+                vehicle.model = vehicle_info.get("model")
+                vehicle.year = vehicle_info.get("year")
+                vehicle.updated_at = datetime.utcnow()
+                db.session.commit()
+                print(f"Updated vehicle info for {vehicle_id}")
             
             for signal in signals:
                 signal_code = signal.get("code", "")
