@@ -17,14 +17,14 @@ def connect_to_database():
     try:
         database_url = os.getenv('DATABASE_URL')
         if not database_url:
-            print("❌ DATABASE_URL not found in environment variables")
+            print("error ")
             return None
         
         print(f"🔗 Connecting to database...")
         conn = psycopg2.connect(database_url)
         return conn
     except Exception as e:
-        print(f"❌ Failed to connect to database: {str(e)}")
+        print(f"error 2")
         return None
 
 def view_users(conn):

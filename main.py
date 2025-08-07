@@ -8,7 +8,6 @@ import hashlib
 from datetime import datetime, timezone
 import json
 
-# Import database models
 from models import db, User, Vehicle, WebhookData, UserSession
 
 load_dotenv()
@@ -16,14 +15,12 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY')
 if not app.secret_key:
-    raise ValueError("SECRET_KEY environment variable is required")
+    raise ValueError("SECRET_KEY env variable not found")
 
-# Database configuration - PostgreSQL only
 database_url = os.getenv('DATABASE_URL')
 if not database_url:
-    raise ValueError("DATABASE_URL environment variable is required")
+    raise ValueError("DATABASE_URL env variable not found")
 
-# Render provides DATABASE_URL for PostgreSQL
 if database_url.startswith('postgres://'):
     database_url = database_url.replace('postgres://', 'postgresql+pg8000://', 1)
 elif database_url.startswith('postgresql://'):
@@ -33,29 +30,28 @@ app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Initialize database
+# initialize database
 db.init_app(app)
 
-# Validate Smartcar configuration
+# smartcar configuration
 smartcar_client_id = os.getenv('SMARTCAR_CLIENT_ID')
 smartcar_client_secret = os.getenv('SMARTCAR_CLIENT_SECRET')
 smartcar_redirect_uri = os.getenv('SMARTCAR_REDIRECT_URI')
 
 if not smartcar_client_id or not smartcar_client_secret or not smartcar_redirect_uri:
-    raise ValueError("SMARTCAR_CLIENT_ID, SMARTCAR_CLIENT_SECRET, and SMARTCAR_REDIRECT_URI environment variables are required")
+    raise ValueError("smartcar env variables are required")
 
 client = smartcar.AuthClient(
     client_id=smartcar_client_id,
     client_secret=smartcar_client_secret,
     redirect_uri=smartcar_redirect_uri,
+    scope=['read_vehicle_info', 'read_location', 'read_odometer', 'read_battery', 'read_charge'],
     test_mode=False
 )
 
-# Database helper functions
-def store_access_token(vehicle_id, access_token_data):
-    """Store access token in database"""
+#token management
+def store_access_token(vehicle_id, access_token_data, user_id):
     try:
-        # Parse expiration time
         from datetime import datetime, timezone
         expiration = datetime.fromtimestamp(access_token_data['expiration'], tz=timezone.utc)
         
@@ -63,21 +59,21 @@ def store_access_token(vehicle_id, access_token_data):
         vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
         
         if vehicle:
-            # Update existing vehicle
             vehicle.access_token = access_token_data['access_token']
             vehicle.refresh_token = access_token_data['refresh_token']
             vehicle.token_expires_at = expiration
             vehicle.updated_at = datetime.utcnow()
         else:
-            # Get or create default user
-            default_user = User.query.filter_by(smartcar_user_id='default_user').first()
-            if not default_user:
-                default_user = User(
-                    smartcar_user_id='default_user',
-                    email='default@example.com'
+            # create new user if it's the first vehicle for this user_id
+            user = User.query.filter_by(smartcar_user_id=user_id).first()
+            # for test vehicle
+            if not user:
+                user = User(
+                    smartcar_user_id=user_id,
+                    email=f'user_{user_id}@example.com' # Placeholder email
                 )
-                db.session.add(default_user)
-                db.session.flush()  # Get the ID
+                db.session.add(user)
+                db.session.flush()
             
             # Create new vehicle
             vehicle = Vehicle(
@@ -85,24 +81,22 @@ def store_access_token(vehicle_id, access_token_data):
                 access_token=access_token_data['access_token'],
                 refresh_token=access_token_data['refresh_token'],
                 token_expires_at=expiration,
-                user_id=default_user.id
+                user_id=user.id
             )
             db.session.add(vehicle)
         
         db.session.commit()
-        print(f"Stored access token for vehicle {vehicle_id}")
+        print(f"Stored access token for vehicle {vehicle_id} for user {user_id}")
         return True
     except Exception as e:
         print(f"Error storing access token: {str(e)}")
         db.session.rollback()
         return False
 
-def get_access_token(vehicle_id):
-    """Get access token from database"""
+def get_access_token(vehicle_id, user_id=None):
     try:
         vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
         if vehicle:
-            # Check if token is expired
             from datetime import datetime, timezone
             if vehicle.token_expires_at > datetime.now(timezone.utc):
                 return {
@@ -111,56 +105,70 @@ def get_access_token(vehicle_id):
                     'expiration': vehicle.token_expires_at.timestamp()
                 }
             else:
-                # Token expired, try to refresh
-                return refresh_access_token_db(vehicle.refresh_token, vehicle_id)
+                # if user_id is not provided, try to get it from the vehicle
+                if user_id is None:
+                    user = User.query.get(vehicle.user_id)
+                    user_id = user.smartcar_user_id if user else None
+                
+                return refresh_access_token_db(vehicle.refresh_token, vehicle_id, user_id)
         return None
     except Exception as e:
         print(f"Error getting access token: {str(e)}")
         return None
 
-def refresh_access_token_db(refresh_token, vehicle_id):
-    """Refresh access token and update database"""
+def refresh_access_token_db(refresh_token, vehicle_id, user_id=None):
     try:
         new_token = client.refresh_token(refresh_token)
         if new_token:
-            store_access_token(vehicle_id, new_token)
+            # if user_id is not provided, try to get it from the vehicle
+            if user_id is None:
+                vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
+                if vehicle:
+                    user = User.query.get(vehicle.user_id)
+                    user_id = user.smartcar_user_id if user else 'default_user'
+                else:
+                    user_id = 'default_user'
+            
+            store_access_token(vehicle_id, new_token, user_id)
             return new_token
         return None
     except Exception as e:
         print(f"Error refreshing token in database: {str(e)}")
         return None
 
-def store_webhook_data(vehicle_id, event_type, data, raw_data=None, timestamp=None):
-    """Store webhook data in database"""
+# get user_id from vehicle
+def get_user_id_from_vehicle(vehicle_id):
+    vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
+    if vehicle:
+        user = User.query.get(vehicle.user_id)
+        return user.smartcar_user_id if user else None
+    return None
+
+
+# store webhook data
+def store_webhook_data(vehicle_id, event_type, data, raw_data=None, timestamp=None, user_id=None):
     try:
         if timestamp is None:
             timestamp = datetime.now()
         
-        # Find vehicle by smartcar_vehicle_id
         vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
         if not vehicle:
             print(f"Vehicle {vehicle_id} not found in database, creating placeholder vehicle")
-            # Create a placeholder vehicle for webhook data
-            default_user = User.query.filter_by(smartcar_user_id='default_user').first()
-            if not default_user:
-                default_user = User(
-                    smartcar_user_id='default_user',
-                    email='default@example.com'
-                )
-                db.session.add(default_user)
-                db.session.flush()
+            # Create placeholder vehicle with provided user_id or default
+            if user_id is None:
+                user_id = 'default_user'
             
-            # Create placeholder vehicle (without tokens since it's from webhook)
-            vehicle = Vehicle(
-                smartcar_vehicle_id=vehicle_id,
-                user_id=default_user.id,
-                access_token='placeholder',  # Will be updated when user connects
-                refresh_token='placeholder',  # Will be updated when user connects
-                token_expires_at=datetime.now()  # Will be updated when user connects
-            )
-            db.session.add(vehicle)
-            db.session.flush()  # Get the vehicle ID
-            print(f"Created placeholder vehicle {vehicle_id}")
+            store_access_token(vehicle_id, {
+                'access_token': 'placeholder', 
+                'refresh_token': 'placeholder', 
+                'expiration': datetime.now().timestamp()
+            }, user_id)
+            
+            vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first() # Re-fetch to get the vehicle ID
+            if not vehicle:
+                print(f"Could not find vehicle {vehicle_id} after attempting to create placeholder")
+                return False
+            print(f"Created placeholder vehicle {vehicle_id} for user {user_id}")
         
         webhook_entry = WebhookData(
             vehicle_id=vehicle.id,
@@ -180,7 +188,6 @@ def store_webhook_data(vehicle_id, event_type, data, raw_data=None, timestamp=No
         return False
 
 def get_webhook_data(vehicle_id=None, event_type=None, limit=100):
-    """Get webhook data from database"""
     try:
         query = WebhookData.query
         
@@ -227,7 +234,17 @@ def index():
 
 @app.route('/login')
 def login():
-    auth_url = client.get_auth_url()
+    # Get user_id from iOS app (passed as query parameter)
+    user_id = request.args.get('user_id')
+    
+    if not user_id:
+        return jsonify({'error': 'user_id parameter is required'}), 400
+    
+    # Store user_id in session for the exchange step
+    session['pending_user_id'] = user_id
+    
+    # Generate auth URL with state parameter to include user_id
+    auth_url = client.get_auth_url(state=user_id)
     return redirect(auth_url)
 
 # Database-only token management - no session fallback
@@ -235,18 +252,25 @@ def login():
 @app.route('/exchange')
 def exchange():
     code = request.args.get('code')
+    state = request.args.get('state')  # This will contain the user_id
     
     if not code:
         content = '<div class="error">Authorization code not found in request</div>'
         return render_template('base.html', content=content)
     
+    # Get user_id from state parameter (sent by iOS app)
+    user_id = state
+    if not user_id:
+        content = '<div class="error">User ID not found in state parameter</div>'
+        return render_template('base.html', content=content)
+    
     try:
         access_token = client.exchange_code(code)
         
-        print(f"Received access token: {access_token}")
+        print(f"Received access token for user {user_id}: {access_token}")
         
         # Store in database only - no session storage
-        print(f"Storing token in database only")
+        print(f"Storing token in database for user {user_id}")
         
         # Get vehicle info to store in database
         try:
@@ -258,8 +282,8 @@ def exchange():
                 vehicle = smartcar.Vehicle(vehicle_id, access_token['access_token'])
                 vehicle_info = vehicle.info()
                 
-                # Store token in database
-                store_access_token(vehicle_id, access_token)
+                # Store token in database with proper user_id
+                store_access_token(vehicle_id, access_token, user_id)
                 
                 # Update vehicle info in database
                 db_vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
@@ -273,18 +297,19 @@ def exchange():
         except Exception as e:
             print(f"Error storing vehicle info in database: {str(e)}")
         
-        content = '''
-        <div class="success">
-            <h3>Authentication Successful!</h3>
-            <p>Your vehicle has been connected successfully.</p>
-            <a href="/vehicle" class="btn">Vehicle Information</a>
-        </div>
-        '''
-        return render_template('base.html', content=content)
+        # Return JSON response for iOS app
+        return jsonify({
+            'status': 'success',
+            'message': 'Vehicle connected successfully',
+            'user_id': user_id,
+            'vehicle_id': vehicle_id if 'vehicle_id' in locals() else None
+        })
         
     except Exception as e:
-        content = f'<div class="error">Error exchanging code: {str(e)}</div>'
-        return render_template('base.html', content=content)
+        return jsonify({
+            'status': 'error',
+            'message': f'Error exchanging code: {str(e)}'
+        }), 400
 
 @app.route('/vehicle')
 def vehicle():
@@ -298,7 +323,10 @@ def vehicle():
             # Use the first vehicle in database
             db_vehicle = db_vehicles[0]
             vehicle_id = db_vehicle.smartcar_vehicle_id
-            token_data = get_access_token(vehicle_id)
+            # Get user_id from the vehicle's user
+            user = User.query.get(db_vehicle.user_id)
+            user_id = user.smartcar_user_id if user else None
+            token_data = get_access_token(vehicle_id, user_id)
             if token_data:
                 access_token = token_data['access_token']
                 print(f"Using database token for vehicle {vehicle_id}")
@@ -498,31 +526,34 @@ def webhook():
             for vehicle in data["data"]["vehicles"]:
                 vehicle_id = vehicle.get("vehicleId")
                 signals = vehicle.get("signals", {})
+                
+                # Try to get user_id from the vehicle using helper function
+                user_id = get_user_id_from_vehicle(vehicle_id)
 
                 # Location.PreciseLocation
                 loc = signals.get("location", {}).get("preciseLocation")
                 if loc:
-                    store_webhook_data(vehicle_id, "Location.PreciseLocation", loc, raw_data=data)
+                    store_webhook_data(vehicle_id, "Location.PreciseLocation", loc, raw_data=data, user_id=user_id)
 
                 # Odometer.TraveledDistance
                 odo = signals.get("odometer", {}).get("traveledDistance")
                 if odo:
-                    store_webhook_data(vehicle_id, "Odometer.TraveledDistance", odo, raw_data=data)
+                    store_webhook_data(vehicle_id, "Odometer.TraveledDistance", odo, raw_data=data, user_id=user_id)
 
                 # TractionBattery.StateOfCharge
                 soc = signals.get("tractionBattery", {}).get("stateOfCharge")
                 if soc:
-                    store_webhook_data(vehicle_id, "TractionBattery.StateOfCharge", soc, raw_data=data)
+                    store_webhook_data(vehicle_id, "TractionBattery.StateOfCharge", soc, raw_data=data, user_id=user_id)
 
                 # TractionBattery.NominalCapacity
                 cap = signals.get("tractionBattery", {}).get("nominalCapacity")
                 if cap:
-                    store_webhook_data(vehicle_id, "TractionBattery.NominalCapacity", cap, raw_data=data)
+                    store_webhook_data(vehicle_id, "TractionBattery.NominalCapacity", cap, raw_data=data, user_id=user_id)
 
                 # Charge.ChargeLimits or Charge.ChargeLimitConfiguration
                 charge_limits = signals.get("charge", {}).get("chargeLimits")
                 if charge_limits:
-                    store_webhook_data(vehicle_id, "Charge.ChargeLimits", charge_limits, raw_data=data)
+                    store_webhook_data(vehicle_id, "Charge.ChargeLimits", charge_limits, raw_data=data, user_id=user_id)
 
             return {'status': 'success', 'message': 'Batch payload processed'}, 200
 
@@ -536,6 +567,7 @@ def webhook():
             
             # Update vehicle info if it exists, or create placeholder
             vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
+            user_id = None
             if vehicle:
                 # Update existing vehicle with info from webhook
                 vehicle.make = vehicle_info.get("make")
@@ -544,6 +576,9 @@ def webhook():
                 vehicle.updated_at = datetime.utcnow()
                 db.session.commit()
                 print(f"Updated vehicle info for {vehicle_id}")
+                
+                # Get user_id from the vehicle using helper function
+                user_id = get_user_id_from_vehicle(vehicle_id)
             
             for signal in signals:
                 signal_code = signal.get("code", "")
@@ -551,23 +586,23 @@ def webhook():
                 
                 # Map signal codes to event types
                 if signal_code == "location-preciselocation":
-                    store_webhook_data(vehicle_id, "Location.PreciseLocation", signal_body, raw_data=data)
+                    store_webhook_data(vehicle_id, "Location.PreciseLocation", signal_body, raw_data=data, user_id=user_id)
                     print(f"Stored Location.PreciseLocation for vehicle {vehicle_id}")
                     
                 elif signal_code == "odometer-traveleddistance":
-                    store_webhook_data(vehicle_id, "Odometer.TraveledDistance", signal_body, raw_data=data)
+                    store_webhook_data(vehicle_id, "Odometer.TraveledDistance", signal_body, raw_data=data, user_id=user_id)
                     print(f"Stored Odometer.TraveledDistance for vehicle {vehicle_id}")
                     
                 elif signal_code == "tractionbattery-stateofcharge":
-                    store_webhook_data(vehicle_id, "TractionBattery.StateOfCharge", signal_body, raw_data=data)
+                    store_webhook_data(vehicle_id, "TractionBattery.StateOfCharge", signal_body, raw_data=data, user_id=user_id)
                     print(f"Stored TractionBattery.StateOfCharge for vehicle {vehicle_id}")
                     
                 elif signal_code == "tractionbattery-nominalcapacity":
-                    store_webhook_data(vehicle_id, "TractionBattery.NominalCapacity", signal_body, raw_data=data)
+                    store_webhook_data(vehicle_id, "TractionBattery.NominalCapacity", signal_body, raw_data=data, user_id=user_id)
                     print(f"Stored TractionBattery.NominalCapacity for vehicle {vehicle_id}")
                     
                 elif signal_code == "charge-chargelimits":
-                    store_webhook_data(vehicle_id, "Charge.ChargeLimits", signal_body, raw_data=data)
+                    store_webhook_data(vehicle_id, "Charge.ChargeLimits", signal_body, raw_data=data, user_id=user_id)
                     print(f"Stored Charge.ChargeLimits for vehicle {vehicle_id}")
             
             return {'status': 'success', 'message': 'VEHICLE_STATE payload processed'}, 200
@@ -582,8 +617,11 @@ def webhook():
         event_type = data.get('eventType')
         event_data = data.get('data', {})
         
+        # Try to get user_id from the vehicle using helper function
+        user_id = get_user_id_from_vehicle(vehicle_id)
+        
         # Store in database
-        store_webhook_data(vehicle_id, event_type, event_data, raw_data=data)
+        store_webhook_data(vehicle_id, event_type, event_data, raw_data=data, user_id=user_id)
         
         print(f"Stored individual webhook data for vehicle {vehicle_id}, event {event_type}")
         
@@ -660,9 +698,16 @@ def webhook_data():
             vehicle = Vehicle.query.get(entry.get('vehicle_id'))
             vehicle_id_display = vehicle.smartcar_vehicle_id if vehicle else 'Unknown'
             
+            # Get user info
+            user_display = 'Unknown'
+            if vehicle:
+                user = User.query.get(vehicle.user_id)
+                user_display = user.smartcar_user_id if user else 'Unknown'
+            
             webhook_entries_html += f'''
             <div class="webhook-entry" style="border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 5px;">
                 <h4>Event: {entry.get('event_type', 'N/A')}</h4>
+                <p><strong>User ID:</strong> {user_display}</p>
                 <p><strong>Vehicle ID:</strong> {vehicle_id_display}</p>
                 <p><strong>Timestamp:</strong> {entry.get('timestamp', 'N/A')}</p>
                 <p><strong>Data:</strong></p>
@@ -688,12 +733,13 @@ def webhook_data():
         <div class="info">
             <h3>Exposed REST API endpoints</h3>
             <ul>
-                <li><strong>Get Vehicle Location:</strong> <code>GET /api/vehicle/vehicle_id/location</code></li>
-                <li><strong>Get Vehicle Battery:</strong> <code>GET /api/vehicle/vehicle_id/battery</code></li>
-                <li><strong>Get Vehicle Odometer:</strong> <code>GET /api/vehicle/vehicle_id/odometer</code></li>
-                <li><strong>Get Vehicle Charge Limits:</strong> <code>GET /api/vehicle/vehicle_id/charge-limits</code></li>
-                <li><strong>Get All Vehicle Data:</strong> <code>GET /api/vehicle/vehicle_id/all</code></li>
-                <li><strong>Get All Vehicles:</strong> <code>GET /api/vehicles</code></li>
+                <li><strong>Get User's Vehicles:</strong> <code>GET /api/user/{user_id}/vehicles</code></li>
+                <li><strong>Get Vehicle Location:</strong> <code>GET /api/user/{user_id}/vehicle/{vehicle_id}/location</code></li>
+                <li><strong>Get Vehicle Battery:</strong> <code>GET /api/user/{user_id}/vehicle/{vehicle_id}/state-of-charge</code></li>
+                <li><strong>Get Vehicle Odometer:</strong> <code>GET /api/user/{user_id}/vehicle/{vehicle_id}/odometer</code></li>
+                <li><strong>Get Vehicle Nominal Capacity:</strong> <code>GET /api/user/{user_id}/vehicle/{vehicle_id}/nominal-capacity</code></li>
+                <li><strong>Get Vehicle Charge Limits:</strong> <code>GET /api/user/{user_id}/vehicle/{vehicle_id}/charge-limits</code></li>
+                <li><strong>Get All Latest Signals:</strong> <code>GET /api/user/{user_id}/vehicle/{vehicle_id}/latest-signals</code></li>
             </ul>
         <div class="info">
             <h3>Webhook Endpoint</h3>
@@ -706,165 +752,6 @@ def webhook_data():
         print(f"Error in webhook_data route: {str(e)}")
         return f'<div class="error">Error loading webhook data: {str(e)}</div>', 500
 
-@app.route('/api/vehicle/<vehicle_id>/location')
-def get_vehicle_location(vehicle_id):
-    """Get location data for a specific vehicle"""
-    latest_location = get_latest_webhook_data(vehicle_id, 'Location.PreciseLocation')
-    
-    if not latest_location:
-        return {'error': 'No location data found for this vehicle'}, 404
-    
-    return {
-        'vehicle_id': vehicle_id,
-        'timestamp': latest_location['timestamp'],
-        'location': latest_location['data']
-    }
-
-@app.route('/api/vehicle/<vehicle_id>/battery')
-def get_vehicle_battery(vehicle_id):
-    """Get battery data for a specific vehicle"""
-    soc_data = get_latest_webhook_data(vehicle_id, 'TractionBattery.StateOfCharge')
-    capacity_data = get_latest_webhook_data(vehicle_id, 'TractionBattery.NominalCapacity')
-    
-    if not soc_data and not capacity_data:
-        return {'error': 'No battery data found for this vehicle'}, 404
-    
-    battery_data = {}
-    latest_timestamp = None
-    
-    if soc_data:
-        battery_data['state_of_charge'] = soc_data['data']
-        latest_timestamp = soc_data['timestamp']
-    
-    if capacity_data:
-        battery_data['nominal_capacity'] = capacity_data['data']
-        if not latest_timestamp or capacity_data['timestamp'] > latest_timestamp:
-            latest_timestamp = capacity_data['timestamp']
-    
-    return {
-        'vehicle_id': vehicle_id,
-        'timestamp': latest_timestamp,
-        'battery': battery_data
-    }
-
-@app.route('/api/vehicle/<vehicle_id>/battery/state-of-charge')
-def get_vehicle_battery_state_of_charge(vehicle_id):
-    """Get battery state of charge for a specific vehicle"""
-    soc_data = get_latest_webhook_data(vehicle_id, 'TractionBattery.StateOfCharge')
-    
-    if not soc_data:
-        return {'error': 'No battery state of charge data found for this vehicle'}, 404
-    
-    return {
-        'vehicle_id': vehicle_id,
-        'timestamp': soc_data['timestamp'],
-        'state_of_charge': soc_data['data']
-    }
-
-@app.route('/api/vehicle/<vehicle_id>/battery/capacity')
-def get_vehicle_battery_capacity(vehicle_id):
-    """Get battery nominal capacity for a specific vehicle"""
-    capacity_data = get_latest_webhook_data(vehicle_id, 'TractionBattery.NominalCapacity')
-    
-    if not capacity_data:
-        return {'error': 'No battery capacity data found for this vehicle'}, 404
-    
-    return {
-        'vehicle_id': vehicle_id,
-        'timestamp': capacity_data['timestamp'],
-        'nominal_capacity': capacity_data['data']
-    }
-
-@app.route('/api/vehicle/<vehicle_id>/odometer')
-def get_vehicle_odometer(vehicle_id):
-    """Get odometer data for a specific vehicle"""
-    odometer_data = get_latest_webhook_data(vehicle_id, 'Odometer.TraveledDistance')
-    
-    if not odometer_data:
-        return {'error': 'No odometer data found for this vehicle'}, 404
-    
-    return {
-        'vehicle_id': vehicle_id,
-        'timestamp': odometer_data['timestamp'],
-        'odometer': odometer_data['data']
-    }
-
-@app.route('/api/vehicle/<vehicle_id>/charge-limits')
-def get_vehicle_charge_limits(vehicle_id):
-    """Get charge limits data for a specific vehicle"""
-    charge_data = get_latest_webhook_data(vehicle_id, 'Charge.ChargeLimits')
-    
-    if not charge_data:
-        return {'error': 'No charge limits data found for this vehicle'}, 404
-    
-    return {
-        'vehicle_id': vehicle_id,
-        'timestamp': charge_data['timestamp'],
-        'charge_limits': charge_data['data']
-    }
-
-@app.route('/api/vehicle/<vehicle_id>/all')
-def get_all_vehicle_data(vehicle_id):
-    vehicle_entries = get_webhook_data(vehicle_id=vehicle_id)
-    
-    if not vehicle_entries:
-        return {'error': 'No data found for this vehicle'}, 404
-    
-    vehicle_data = {
-        'vehicle_id': vehicle_id,
-        'last_updated': vehicle_entries[0]['timestamp'] if vehicle_entries else None,
-        'data': {}
-    }
-    
-    for entry in vehicle_entries:
-        event_type = entry['event_type']
-        if event_type not in vehicle_data['data']:
-            vehicle_data['data'][event_type] = []
-        vehicle_data['data'][event_type].append({
-            'timestamp': entry['timestamp'],
-            'data': entry['data']
-        })
-    
-    return vehicle_data
-
-@app.route('/api/vehicles')
-def get_all_vehicles():
-    vehicles = Vehicle.query.all()
-    vehicle_ids = [vehicle.smartcar_vehicle_id for vehicle in vehicles]
-    
-    # Get total webhook entries
-    total_entries = WebhookData.query.count()
-    
-    return {
-        'vehicles': vehicle_ids,
-        'total_vehicles': len(vehicle_ids),
-        'total_entries': total_entries
-    }
-
-@app.route('/api/vehicle/<vehicle_id>/latest-signals')
-def get_latest_signals(vehicle_id):
-    # Define the event types you want to fetch
-    event_types = [
-        'Location.PreciseLocation',
-        'Odometer.TraveledDistance',
-        'TractionBattery.StateOfCharge',
-        'TractionBattery.NominalCapacity',
-        'Charge.ChargeLimits'  # If you want Charge.ChargeLimitConfiguration, use that string
-    ]
-
-    latest_signals = {}
-
-    for event_type in event_types:
-        latest_entry = get_latest_webhook_data(vehicle_id, event_type)
-        if latest_entry:
-            latest_signals[event_type] = {
-                'timestamp': latest_entry['timestamp'],
-                'data': latest_entry['data']
-            }
-        else:
-            latest_signals[event_type] = None  # Or you can omit this key if preferred
-
-    return latest_signals
 
 def handle_verification(data):
     try:
@@ -898,46 +785,291 @@ def handle_verification(data):
         print(f"Error handling verification: {str(e)}")
         return {'error': str(e)}, 500
 
-def extract_signals_from_entry(entry):
-    signals = entry['data'].get('signals', {})
-    result = {}
-    # Location
-    if 'location' in signals and 'preciseLocation' in signals['location']:
-        result['Location.PreciseLocation'] = [ { 'data': signals['location']['preciseLocation'] } ]
-    # Odometer
-    if 'odometer' in signals and 'traveledDistance' in signals['odometer']:
-        result['Odometer.TraveledDistance'] = [ { 'data': signals['odometer']['traveledDistance'] } ]
-    # State of Charge
-    if 'tractionBattery' in signals and 'stateOfCharge' in signals['tractionBattery']:
-        result['TractionBattery.StateOfCharge'] = [ { 'data': signals['tractionBattery']['stateOfCharge'] } ]
-    # Nominal Capacity
-    if 'tractionBattery' in signals and 'nominalCapacity' in signals['tractionBattery']:
-        result['TractionBattery.NominalCapacity'] = [ { 'data': signals['tractionBattery']['nominalCapacity'] } ]
-    # Charge Limits
-    if 'charge' in signals and 'chargeLimits' in signals['charge']:
-        result['Charge.ChargeLimits'] = [ { 'data': signals['charge']['chargeLimits'] } ]
-    return result
 
-@app.route('/api/vehicle/<vehicle_id>/signals-preview')
-def signals_preview(vehicle_id):
-    # Find the latest batch entry for this vehicle
-    vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
-    if not vehicle:
-        return {'error': 'Vehicle not found'}, 404
-    
-    latest_batch = WebhookData.query.filter_by(
-        vehicle_id=vehicle.id
-    ).order_by(WebhookData.timestamp.desc()).first()
-    
-    if latest_batch and 'signals' in latest_batch.data_dict:
-        return extract_signals_from_entry(latest_batch.to_dict())
-    
-    return {'error': 'No batch signal data found for this vehicle'}, 404
+# Add new API endpoints for user-specific data
+
+@app.route('/api/user/<user_id>/vehicles')
+def get_user_vehicles(user_id):
+    """Get all vehicles for a specific user"""
+    try:
+        user = User.query.filter_by(smartcar_user_id=user_id).first()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        vehicles = Vehicle.query.filter_by(user_id=user.id).all()
+        vehicle_data = []
+        
+        for vehicle in vehicles:
+            vehicle_info = vehicle.to_dict()
+            # Add latest data for each vehicle
+            latest_location = get_latest_webhook_data(vehicle.smartcar_vehicle_id, 'Location.PreciseLocation')
+            latest_battery = get_latest_webhook_data(vehicle.smartcar_vehicle_id, 'TractionBattery.StateOfCharge')
+            latest_odometer = get_latest_webhook_data(vehicle.smartcar_vehicle_id, 'Odometer.TraveledDistance')
+            
+            vehicle_info['latest_data'] = {
+                'location': latest_location['data'] if latest_location else None,
+                'battery': latest_battery['data'] if latest_battery else None,
+                'odometer': latest_odometer['data'] if latest_odometer else None
+            }
+            vehicle_data.append(vehicle_info)
+        
+        return jsonify({
+            'user_id': user_id,
+            'vehicles': vehicle_data,
+            'total_vehicles': len(vehicle_data)
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/user/<user_id>/vehicle/<vehicle_id>/latest-signals')
+def get_user_vehicle_latest_signals(user_id, vehicle_id):
+    """Get latest signals for a specific user's vehicle"""
+    try:
+        # Verify the vehicle belongs to the user
+        user = User.query.filter_by(smartcar_user_id=user_id).first()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        vehicle = Vehicle.query.filter_by(
+            smartcar_vehicle_id=vehicle_id,
+            user_id=user.id
+        ).first()
+        
+        if not vehicle:
+            return jsonify({'error': 'Vehicle not found for this user'}), 404
+        
+        # Define the event types you want to fetch
+        event_types = [
+            'Location.PreciseLocation',
+            'Odometer.TraveledDistance',
+            'TractionBattery.StateOfCharge',
+            'TractionBattery.NominalCapacity',
+            'Charge.ChargeLimits'
+        ]
+
+        latest_signals = {}
+
+        for event_type in event_types:
+            latest_entry = get_latest_webhook_data(vehicle_id, event_type)
+            if latest_entry:
+                latest_signals[event_type] = {
+                    'timestamp': latest_entry['timestamp'],
+                    'data': latest_entry['data']
+                }
+            else:
+                latest_signals[event_type] = None
+
+        return jsonify({
+            'user_id': user_id,
+            'vehicle_id': vehicle_id,
+            'signals': latest_signals
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# Individual signal endpoints for cleaner iOS app integration
+
+@app.route('/api/user/<user_id>/vehicle/<vehicle_id>/location')
+def get_user_vehicle_location(user_id, vehicle_id):
+    """Get location data for a specific user's vehicle"""
+    try:
+        # Verify the vehicle belongs to the user
+        user = User.query.filter_by(smartcar_user_id=user_id).first()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        vehicle = Vehicle.query.filter_by(
+            smartcar_vehicle_id=vehicle_id,
+            user_id=user.id
+        ).first()
+        
+        if not vehicle:
+            return jsonify({'error': 'Vehicle not found for this user'}), 404
+        
+        latest_location = get_latest_webhook_data(vehicle_id, 'Location.PreciseLocation')
+        
+        if not latest_location:
+            return jsonify({'error': 'No location data found for this vehicle'}), 404
+        
+        return jsonify({
+            'user_id': user_id,
+            'vehicle_id': vehicle_id,
+            'timestamp': latest_location['timestamp'],
+            'location': latest_location['data']
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/user/<user_id>/vehicle/<vehicle_id>/odometer')
+def get_user_vehicle_odometer(user_id, vehicle_id):
+    """Get odometer data for a specific user's vehicle"""
+    try:
+        # Verify the vehicle belongs to the user
+        user = User.query.filter_by(smartcar_user_id=user_id).first()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        vehicle = Vehicle.query.filter_by(
+            smartcar_vehicle_id=vehicle_id,
+            user_id=user.id
+        ).first()
+        
+        if not vehicle:
+            return jsonify({'error': 'Vehicle not found for this user'}), 404
+        
+        latest_odometer = get_latest_webhook_data(vehicle_id, 'Odometer.TraveledDistance')
+        
+        if not latest_odometer:
+            return jsonify({'error': 'No odometer data found for this vehicle'}), 404
+        
+        return jsonify({
+            'user_id': user_id,
+            'vehicle_id': vehicle_id,
+            'timestamp': latest_odometer['timestamp'],
+            'odometer': latest_odometer['data']
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/user/<user_id>/vehicle/<vehicle_id>/state-of-charge')
+def get_user_vehicle_state_of_charge(user_id, vehicle_id):
+    """Get battery state of charge for a specific user's vehicle"""
+    try:
+        # Verify the vehicle belongs to the user
+        user = User.query.filter_by(smartcar_user_id=user_id).first()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        vehicle = Vehicle.query.filter_by(
+            smartcar_vehicle_id=vehicle_id,
+            user_id=user.id
+        ).first()
+        
+        if not vehicle:
+            return jsonify({'error': 'Vehicle not found for this user'}), 404
+        
+        latest_soc = get_latest_webhook_data(vehicle_id, 'TractionBattery.StateOfCharge')
+        
+        if not latest_soc:
+            return jsonify({'error': 'No state of charge data found for this vehicle'}), 404
+        
+        # Extract the single value (percentage)
+        soc_value = latest_soc['data'].get('value', latest_soc['data'].get('percentage'))
+        
+        return jsonify({
+            'user_id': user_id,
+            'vehicle_id': vehicle_id,
+            'timestamp': latest_soc['timestamp'],
+            'state_of_charge': soc_value
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/user/<user_id>/vehicle/<vehicle_id>/nominal-capacity')
+def get_user_vehicle_nominal_capacity(user_id, vehicle_id):
+    """Get battery nominal capacity for a specific user's vehicle"""
+    try:
+        # Verify the vehicle belongs to the user
+        user = User.query.filter_by(smartcar_user_id=user_id).first()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        vehicle = Vehicle.query.filter_by(
+            smartcar_vehicle_id=vehicle_id,
+            user_id=user.id
+        ).first()
+        
+        if not vehicle:
+            return jsonify({'error': 'Vehicle not found for this user'}), 404
+        
+        latest_capacity = get_latest_webhook_data(vehicle_id, 'TractionBattery.NominalCapacity')
+        
+        if not latest_capacity:
+            return jsonify({'error': 'No nominal capacity data found for this vehicle'}), 404
+        
+        # Extract the single capacity value (default to the first one if it's a list)
+        capacity_data = latest_capacity['data']
+        capacity_value = None
+        
+        if 'capacity' in capacity_data:
+            # Single capacity value
+            capacity_value = capacity_data['capacity']
+        elif 'availableCapacities' in capacity_data and capacity_data['availableCapacities']:
+            # List of capacities - take the first one as default
+            capacity_value = capacity_data['availableCapacities'][0].get('capacity')
+        
+        if capacity_value is None:
+            return jsonify({'error': 'Could not extract capacity value from data'}), 404
+        
+        return jsonify({
+            'user_id': user_id,
+            'vehicle_id': vehicle_id,
+            'timestamp': latest_capacity['timestamp'],
+            'nominal_capacity': capacity_value
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/user/<user_id>/vehicle/<vehicle_id>/charge-limits')
+def get_user_vehicle_charge_limits(user_id, vehicle_id):
+    try:
+        # Verify the vehicle belongs to the user
+        user = User.query.filter_by(smartcar_user_id=user_id).first()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        vehicle = Vehicle.query.filter_by(
+            smartcar_vehicle_id=vehicle_id,
+            user_id=user.id
+        ).first()
+        
+        if not vehicle:
+            return jsonify({'error': 'Vehicle not found for this user'}), 404
+        
+        latest_charge_limits = get_latest_webhook_data(vehicle_id, 'Charge.ChargeLimits')
+        
+        if not latest_charge_limits:
+            return jsonify({'error': 'No charge limits data found for this vehicle'}), 404
+        
+        charge_data = latest_charge_limits['data']
+        charge_limit_value = None
+        
+        if 'values' in charge_data:
+            values_data = charge_data['values']
+            if 'activeLimit' in values_data:
+                charge_limit_value = values_data['activeLimit']
+            elif 'values' in values_data and values_data['values']:
+                for limit_item in values_data['values']:
+                    if limit_item.get('type') == 'global':
+                        charge_limit_value = limit_item.get('limit')
+                        break
+                if charge_limit_value is None and values_data['values']:
+                    charge_limit_value = values_data['values'][0].get('limit')
+        
+        if charge_limit_value is None:
+            return jsonify({'error': 'Could not extract charge limit value from data'}), 404
+        
+        return jsonify({
+            'user_id': user_id,
+            'vehicle_id': vehicle_id,
+            'timestamp': latest_charge_limits['timestamp'],
+            'charge_limit': charge_limit_value
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/clear-webhook-data', methods=['POST'])
 def clear_webhook_data():
     try:
-        # Clear all webhook data from database
+        # clear all webhook data from database
         WebhookData.query.delete()
         db.session.commit()
         return {'status': 'success', 'message': 'All webhook data cleared from database'}, 200
