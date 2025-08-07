@@ -154,6 +154,7 @@ def store_webhook_data(vehicle_id, event_type, data, raw_data=None, timestamp=No
         vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
         if not vehicle:
             print(f"Vehicle {vehicle_id} not found in database, creating placeholder vehicle")
+
             # Create placeholder vehicle with provided user_id or default
             if user_id is None:
                 user_id = 'default_user'
@@ -164,7 +165,7 @@ def store_webhook_data(vehicle_id, event_type, data, raw_data=None, timestamp=No
                 'expiration': datetime.now().timestamp()
             }, user_id)
             
-            vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first() # Re-fetch to get the vehicle ID
+            vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
             if not vehicle:
                 print(f"Could not find vehicle {vehicle_id} after attempting to create placeholder")
                 return False
@@ -187,40 +188,7 @@ def store_webhook_data(vehicle_id, event_type, data, raw_data=None, timestamp=No
         db.session.rollback()
         return False
 
-def get_webhook_data(vehicle_id=None, event_type=None, limit=100):
-    try:
-        query = WebhookData.query
-        
-        if vehicle_id:
-            vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
-            if vehicle:
-                query = query.filter_by(vehicle_id=vehicle.id)
-        
-        if event_type:
-            query = query.filter_by(event_type=event_type)
-        
-        entries = query.order_by(WebhookData.timestamp.desc()).limit(limit).all()
-        return [entry.to_dict() for entry in entries]
-    except Exception as e:
-        print(f"Error getting webhook data: {str(e)}")
-        return []
 
-def get_latest_webhook_data(vehicle_id, event_type):
-    """Get latest webhook data for specific vehicle and event type"""
-    try:
-        vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
-        if not vehicle:
-            return None
-        
-        entry = WebhookData.query.filter_by(
-            vehicle_id=vehicle.id,
-            event_type=event_type
-        ).order_by(WebhookData.timestamp.desc()).first()
-        
-        return entry.to_dict() if entry else None
-    except Exception as e:
-        print(f"Error getting latest webhook data: {str(e)}")
-        return None
 
 @app.route('/')
 def index():
@@ -683,8 +651,15 @@ def webhook_data():
     """Display webhook data dashboard"""
     try:
         import json
-        # Get webhook data from database
-        webhook_entries = get_webhook_data(limit=50)
+        # Get webhook data from database for all users (admin view)
+        # For a production system, you might want to add authentication here
+        webhook_entries = []
+        
+        # Get all webhook data (admin view)
+        webhook_entries = WebhookData.query.order_by(WebhookData.timestamp.desc()).limit(50).all()
+        webhook_entries = [entry.to_dict() for entry in webhook_entries]
+        
+
         
         # Create HTML for webhook entries
         webhook_entries_html = ""
@@ -802,16 +777,27 @@ def get_user_vehicles(user_id):
         
         for vehicle in vehicles:
             vehicle_info = vehicle.to_dict()
-            # Add latest data for each vehicle
-            latest_location = get_latest_webhook_data(vehicle.smartcar_vehicle_id, 'Location.PreciseLocation')
-            latest_battery = get_latest_webhook_data(vehicle.smartcar_vehicle_id, 'TractionBattery.StateOfCharge')
-            latest_odometer = get_latest_webhook_data(vehicle.smartcar_vehicle_id, 'Odometer.TraveledDistance')
+                            # Add latest data for each vehicle
+        latest_location_entry = WebhookData.query.filter_by(
+            vehicle_id=vehicle.id,
+            event_type='Location.PreciseLocation'
+        ).order_by(WebhookData.timestamp.desc()).first()
+        
+        latest_battery_entry = WebhookData.query.filter_by(
+            vehicle_id=vehicle.id,
+            event_type='TractionBattery.StateOfCharge'
+        ).order_by(WebhookData.timestamp.desc()).first()
+        
+        latest_odometer_entry = WebhookData.query.filter_by(
+            vehicle_id=vehicle.id,
+            event_type='Odometer.TraveledDistance'
+        ).order_by(WebhookData.timestamp.desc()).first()
             
-            vehicle_info['latest_data'] = {
-                'location': latest_location['data'] if latest_location else None,
-                'battery': latest_battery['data'] if latest_battery else None,
-                'odometer': latest_odometer['data'] if latest_odometer else None
-            }
+        vehicle_info['latest_data'] = {
+            'location': latest_location_entry.to_dict()['data'] if latest_location_entry else None,
+            'battery': latest_battery_entry.to_dict()['data'] if latest_battery_entry else None,
+            'odometer': latest_odometer_entry.to_dict()['data'] if latest_odometer_entry else None
+        }
             vehicle_data.append(vehicle_info)
         
         return jsonify({
@@ -852,11 +838,15 @@ def get_user_vehicle_latest_signals(user_id, vehicle_id):
         latest_signals = {}
 
         for event_type in event_types:
-            latest_entry = get_latest_webhook_data(vehicle_id, event_type)
+            latest_entry = WebhookData.query.filter_by(
+                vehicle_id=vehicle.id,
+                event_type=event_type
+            ).order_by(WebhookData.timestamp.desc()).first()
+            
             if latest_entry:
                 latest_signals[event_type] = {
-                    'timestamp': latest_entry['timestamp'],
-                    'data': latest_entry['data']
+                    'timestamp': latest_entry.timestamp,
+                    'data': latest_entry.to_dict()['data']
                 }
             else:
                 latest_signals[event_type] = None
@@ -889,16 +879,19 @@ def get_user_vehicle_location(user_id, vehicle_id):
         if not vehicle:
             return jsonify({'error': 'Vehicle not found for this user'}), 404
         
-        latest_location = get_latest_webhook_data(vehicle_id, 'Location.PreciseLocation')
+        latest_location_entry = WebhookData.query.filter_by(
+            vehicle_id=vehicle.id,
+            event_type='Location.PreciseLocation'
+        ).order_by(WebhookData.timestamp.desc()).first()
         
-        if not latest_location:
+        if not latest_location_entry:
             return jsonify({'error': 'No location data found for this vehicle'}), 404
         
         return jsonify({
             'user_id': user_id,
             'vehicle_id': vehicle_id,
-            'timestamp': latest_location['timestamp'],
-            'location': latest_location['data']
+            'timestamp': latest_location_entry.timestamp,
+            'location': latest_location_entry.to_dict()['data']
         })
         
     except Exception as e:
@@ -921,16 +914,19 @@ def get_user_vehicle_odometer(user_id, vehicle_id):
         if not vehicle:
             return jsonify({'error': 'Vehicle not found for this user'}), 404
         
-        latest_odometer = get_latest_webhook_data(vehicle_id, 'Odometer.TraveledDistance')
+        latest_odometer_entry = WebhookData.query.filter_by(
+            vehicle_id=vehicle.id,
+            event_type='Odometer.TraveledDistance'
+        ).order_by(WebhookData.timestamp.desc()).first()
         
-        if not latest_odometer:
+        if not latest_odometer_entry:
             return jsonify({'error': 'No odometer data found for this vehicle'}), 404
         
         return jsonify({
             'user_id': user_id,
             'vehicle_id': vehicle_id,
-            'timestamp': latest_odometer['timestamp'],
-            'odometer': latest_odometer['data']
+            'timestamp': latest_odometer_entry.timestamp,
+            'odometer': latest_odometer_entry.to_dict()['data']
         })
         
     except Exception as e:
@@ -953,18 +949,22 @@ def get_user_vehicle_state_of_charge(user_id, vehicle_id):
         if not vehicle:
             return jsonify({'error': 'Vehicle not found for this user'}), 404
         
-        latest_soc = get_latest_webhook_data(vehicle_id, 'TractionBattery.StateOfCharge')
+        latest_soc_entry = WebhookData.query.filter_by(
+            vehicle_id=vehicle.id,
+            event_type='TractionBattery.StateOfCharge'
+        ).order_by(WebhookData.timestamp.desc()).first()
         
-        if not latest_soc:
+        if not latest_soc_entry:
             return jsonify({'error': 'No state of charge data found for this vehicle'}), 404
         
         # Extract the single value (percentage)
-        soc_value = latest_soc['data'].get('value', latest_soc['data'].get('percentage'))
+        soc_data = latest_soc_entry.to_dict()['data']
+        soc_value = soc_data.get('value', soc_data.get('percentage'))
         
         return jsonify({
             'user_id': user_id,
             'vehicle_id': vehicle_id,
-            'timestamp': latest_soc['timestamp'],
+            'timestamp': latest_soc_entry.timestamp,
             'state_of_charge': soc_value
         })
         
@@ -988,13 +988,16 @@ def get_user_vehicle_nominal_capacity(user_id, vehicle_id):
         if not vehicle:
             return jsonify({'error': 'Vehicle not found for this user'}), 404
         
-        latest_capacity = get_latest_webhook_data(vehicle_id, 'TractionBattery.NominalCapacity')
+        latest_capacity_entry = WebhookData.query.filter_by(
+            vehicle_id=vehicle.id,
+            event_type='TractionBattery.NominalCapacity'
+        ).order_by(WebhookData.timestamp.desc()).first()
         
-        if not latest_capacity:
+        if not latest_capacity_entry:
             return jsonify({'error': 'No nominal capacity data found for this vehicle'}), 404
         
         # Extract the single capacity value (default to the first one if it's a list)
-        capacity_data = latest_capacity['data']
+        capacity_data = latest_capacity_entry.to_dict()['data']
         capacity_value = None
         
         if 'capacity' in capacity_data:
@@ -1010,7 +1013,7 @@ def get_user_vehicle_nominal_capacity(user_id, vehicle_id):
         return jsonify({
             'user_id': user_id,
             'vehicle_id': vehicle_id,
-            'timestamp': latest_capacity['timestamp'],
+            'timestamp': latest_capacity_entry.timestamp,
             'nominal_capacity': capacity_value
         })
         
@@ -1033,12 +1036,15 @@ def get_user_vehicle_charge_limits(user_id, vehicle_id):
         if not vehicle:
             return jsonify({'error': 'Vehicle not found for this user'}), 404
         
-        latest_charge_limits = get_latest_webhook_data(vehicle_id, 'Charge.ChargeLimits')
+        latest_charge_limits_entry = WebhookData.query.filter_by(
+            vehicle_id=vehicle.id,
+            event_type='Charge.ChargeLimits'
+        ).order_by(WebhookData.timestamp.desc()).first()
         
-        if not latest_charge_limits:
+        if not latest_charge_limits_entry:
             return jsonify({'error': 'No charge limits data found for this vehicle'}), 404
         
-        charge_data = latest_charge_limits['data']
+        charge_data = latest_charge_limits_entry.to_dict()['data']
         charge_limit_value = None
         
         if 'values' in charge_data:
@@ -1059,7 +1065,7 @@ def get_user_vehicle_charge_limits(user_id, vehicle_id):
         return jsonify({
             'user_id': user_id,
             'vehicle_id': vehicle_id,
-            'timestamp': latest_charge_limits['timestamp'],
+            'timestamp': latest_charge_limits_entry.timestamp,
             'charge_limit': charge_limit_value
         })
         
