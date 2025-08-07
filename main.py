@@ -1,6 +1,5 @@
 import os
 import smartcar
-from smartcar import exceptions
 from flask import Flask, request, redirect, session, render_template, jsonify
 from dotenv import load_dotenv
 import hmac
@@ -349,9 +348,6 @@ def vehicle():
                 location = vehicle.location()
                 print(f"Location response: {location}")
                 location_info = f"<p><strong>Location:</strong> {location.get('data', {}).get('latitude', 'N/A')}, {location.get('data', {}).get('longitude', 'N/A')} (from API)</p>"
-            except smartcar.exceptions.RateLimitingException as e:
-                print(f"Rate limiting error: {str(e)}")
-                location_info = f"<p><strong>Location:</strong> Rate limited - please try again later</p>"
             except Exception as e:
                 print(f"Error getting location: {str(e)}")
                 location_info = "<p><strong>Location:</strong> Error retrieving location</p>"
@@ -381,9 +377,6 @@ def vehicle():
                 odometer = vehicle.odometer()
                 print(f"Odometer response: {odometer}")
                 odometer_info = f"<p><strong>Odometer:</strong> {odometer.get('data', {}).get('distance', odometer.get('data', {}).get('value', 'N/A'))} km (from API)</p>"
-            except smartcar.exceptions.RateLimitingException as e:
-                print(f"Rate limiting error: {str(e)}")
-                odometer_info = f"<p><strong>Odometer:</strong> Rate limited - please try again later</p>"
             except Exception as e:
                 print(f"Error getting odometer: {str(e)}")
                 odometer_info = "<p><strong>Odometer:</strong> Error retrieving odometer</p>"
@@ -485,43 +478,8 @@ def vehicle():
         
         return render_template('base.html', content=content)
         
-    except smartcar.exceptions.RateLimitingException as e:
-        print(f"Rate limiting error: {str(e)}")
-        content = f'''
-        <div class="error">
-            <h3>Rate Limiting Error</h3>
-            <p>You have reached the throttling rate limit for this vehicle. Please try again later.</p>
-            <p><strong>Error:</strong> {str(e)}</p>
-            <a href="/vehicle" class="btn">Try Again</a>
-        </div>
-        '''
-        return render_template('base.html', content=content)
-    except smartcar.exceptions.AuthenticationException as e:
-        print(f"Authentication error: {str(e)}")
-        # Clear the invalid token from session
-        session.pop('access_token', None)
-        content = f'''
-        <div class="error">
-            <h3>Authentication Error</h3>
-            <p>Access token has expired.</p>
-            <p><strong>Error:</strong> {str(e)}</p>
-            <a href="/login" class="btn">Reconnect</a>
-        </div>
-        '''
-        return render_template('base.html', content=content)
-    except smartcar.exceptions.PermissionException as e:
-        print(f"Permission error: {str(e)}")
-        content = f'''
-        <div class="error">
-            <h3>Permission Error</h3>
-            <p>You don't have permission to access this vehicle data.</p>
-            <p><strong>Error:</strong> {str(e)}</p>
-            <a href="/login" class="btn">Reconnect Vehicle</a>
-        </div>
-        '''
-        return render_template('base.html', content=content)
     except Exception as e:
-        print(f"Unexpected error: {str(e)}")
+        print(f"Error in vehicle route: {str(e)}")
         import traceback
         traceback.print_exc()
         content = f'''
