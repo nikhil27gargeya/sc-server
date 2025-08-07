@@ -733,14 +733,15 @@ def webhook_data():
         <div class="info">
             <h3>Exposed REST API endpoints</h3>
             <ul>
-                <li><strong>Get User's Vehicles:</strong> <code>GET /api/user/{user_id}/vehicles</code></li>
-                <li><strong>Get Vehicle Location:</strong> <code>GET /api/user/{user_id}/vehicle/{vehicle_id}/location</code></li>
-                <li><strong>Get Vehicle Battery:</strong> <code>GET /api/user/{user_id}/vehicle/{vehicle_id}/state-of-charge</code></li>
-                <li><strong>Get Vehicle Odometer:</strong> <code>GET /api/user/{user_id}/vehicle/{vehicle_id}/odometer</code></li>
-                <li><strong>Get Vehicle Nominal Capacity:</strong> <code>GET /api/user/{user_id}/vehicle/{vehicle_id}/nominal-capacity</code></li>
-                <li><strong>Get Vehicle Charge Limits:</strong> <code>GET /api/user/{user_id}/vehicle/{vehicle_id}/charge-limits</code></li>
-                <li><strong>Get All Latest Signals:</strong> <code>GET /api/user/{user_id}/vehicle/{vehicle_id}/latest-signals</code></li>
+                <li><strong>Get User's Vehicles:</strong> <code>GET /api/user/{{user_id}}/vehicles</code></li>
+                <li><strong>Get Vehicle Location:</strong> <code>GET /api/user/{{user_id}}/vehicle/{{vehicle_id}}/location</code></li>
+                <li><strong>Get Vehicle Battery:</strong> <code>GET /api/user/{{user_id}}/vehicle/{{vehicle_id}}/state-of-charge</code></li>
+                <li><strong>Get Vehicle Odometer:</strong> <code>GET /api/user/{{user_id}}/vehicle/{{vehicle_id}}/odometer</code></li>
+                <li><strong>Get Vehicle Nominal Capacity:</strong> <code>GET /api/user/{{user_id}}/vehicle/{{vehicle_id}}/nominal-capacity</code></li>
+                <li><strong>Get Vehicle Charge Limits:</strong> <code>GET /api/user/{{user_id}}/vehicle/{{vehicle_id}}/charge-limits</code></li>
+                <li><strong>Get All Latest Signals:</strong> <code>GET /api/user/{{user_id}}/vehicle/{{vehicle_id}}/latest-signals</code></li>
             </ul>
+        </div>
         <div class="info">
             <h3>Webhook Endpoint</h3>
             <p><strong>URL:</strong> https://sc-server-o0m5.onrender.com/webhook</p>
