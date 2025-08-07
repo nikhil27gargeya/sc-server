@@ -20,7 +20,7 @@ def init_database():
         db.create_all()
         
         print("Database tables created successfully!")
-        
+
         # Create a default user if none exists
         default_user = User.query.first()
         if not default_user:
@@ -47,4 +47,4 @@ def init_database():
         print("\nDatabase initialization complete!")
 
 if __name__ == '__main__':
-    init_database() 
+    init_database()

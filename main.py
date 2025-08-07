@@ -70,7 +70,7 @@ def store_access_token(vehicle_id, access_token_data, user_id):
             if not user:
                 user = User(
                     smartcar_user_id=user_id,
-                    email=f'user_{user_id}@example.com' # Placeholder email
+                    email=f'user_{user_id}@example.com'
                 )
                 db.session.add(user)
                 db.session.flush()
@@ -120,7 +120,6 @@ def refresh_access_token_db(refresh_token, vehicle_id, user_id=None):
     try:
         new_token = client.refresh_token(refresh_token)
         if new_token:
-            # if user_id is not provided, try to get it from the vehicle
             if user_id is None:
                 vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
                 if vehicle:
@@ -130,7 +129,7 @@ def refresh_access_token_db(refresh_token, vehicle_id, user_id=None):
                     user_id = 'default_user'
             
             store_access_token(vehicle_id, new_token, user_id)
-            return new_token
+        return new_token
         return None
     except Exception as e:
         print(f"Error refreshing token in database: {str(e)}")
@@ -155,7 +154,6 @@ def store_webhook_data(vehicle_id, event_type, data, raw_data=None, timestamp=No
         if not vehicle:
             print(f"Vehicle {vehicle_id} not found in database, creating placeholder vehicle")
 
-            # Create placeholder vehicle with provided user_id or default
             if user_id is None:
                 user_id = 'default_user'
             
@@ -202,7 +200,6 @@ def index():
 
 @app.route('/login')
 def login():
-    # Get user_id from iOS app (passed as query parameter)
     user_id = request.args.get('user_id')
     
     if not user_id:
@@ -215,7 +212,6 @@ def login():
     auth_url = client.get_auth_url(state=user_id)
     return redirect(auth_url)
 
-# Database-only token management - no session fallback
 
 @app.route('/exchange')
 def exchange():
@@ -223,7 +219,7 @@ def exchange():
     state = request.args.get('state')  # This will contain the user_id
     
     if not code:
-        content = '<div class="error">Authorization code not found in request</div>'
+        content = '<div class="error">authorization code not found in request</div>'
         return render_template('base.html', content=content)
     
     # Get user_id from state parameter (sent by iOS app)
@@ -240,20 +236,16 @@ def exchange():
         # Store in database only - no session storage
         print(f"Storing token in database for user {user_id}")
         
-        # Get vehicle info to store in database
         try:
             vehicle_ids = smartcar.get_vehicle_ids(access_token['access_token'])
             if vehicle_ids['vehicles']:
                 vehicle_id = vehicle_ids['vehicles'][0]
                 
-                # Get vehicle details
                 vehicle = smartcar.Vehicle(vehicle_id, access_token['access_token'])
                 vehicle_info = vehicle.info()
                 
-                # Store token in database with proper user_id
                 store_access_token(vehicle_id, access_token, user_id)
                 
-                # Update vehicle info in database
                 db_vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
                 if db_vehicle:
                     db_vehicle.make = vehicle_info.get('make')
@@ -261,11 +253,9 @@ def exchange():
                     db_vehicle.year = vehicle_info.get('year')
                     db.session.commit()
                     print(f"Updated vehicle info for {vehicle_id}")
-                
         except Exception as e:
             print(f"Error storing vehicle info in database: {str(e)}")
         
-        # Return JSON response for iOS app
         return jsonify({
             'status': 'success',
             'message': 'Vehicle connected successfully',
@@ -282,16 +272,15 @@ def exchange():
 @app.route('/vehicle')
 def vehicle():
     try:
-        # First try to get token from database
         db_vehicles = Vehicle.query.all()
         access_token = None
         vehicle_id = None
         
         if db_vehicles:
-            # Use the first vehicle in database
             db_vehicle = db_vehicles[0]
+
             vehicle_id = db_vehicle.smartcar_vehicle_id
-            # Get user_id from the vehicle's user
+
             user = User.query.get(db_vehicle.user_id)
             user_id = user.smartcar_user_id if user else None
             token_data = get_access_token(vehicle_id, user_id)
@@ -299,7 +288,6 @@ def vehicle():
                 access_token = token_data['access_token']
                 print(f"Using database token for vehicle {vehicle_id}")
         
-        # No fallback - require database tokens
         if not access_token:
             content = '''
             <div class="error">
@@ -340,9 +328,21 @@ def vehicle():
         
         if latest_location_entry:
             location_data = latest_location_entry.to_dict()['data']
-            lat = location_data.get('latitude', 'N/A')
-            lng = location_data.get('longitude', 'N/A')
-            location_info = f"<p><strong>Location:</strong> {lat}, {lng} (from webhook)</p>"
+            # Handle both old and new data structures
+            if 'value' in location_data:
+                # New enhanced structure
+                location_value = location_data['value']
+                lat = location_value.get('latitude', 'N/A')
+                lng = location_value.get('longitude', 'N/A')
+                direction = location_value.get('direction', 'N/A')
+                heading = location_value.get('heading', 'N/A')
+                location_type = location_value.get('locationType', 'N/A')
+                location_info = f"<p><strong>Location:</strong> {lat}, {lng} (Direction: {direction}, Heading: {heading}, Type: {location_type}) (from webhook)</p>"
+            else:
+                # Old structure
+                lat = location_data.get('latitude', 'N/A')
+                lng = location_data.get('longitude', 'N/A')
+                location_info = f"<p><strong>Location:</strong> {lat}, {lng} (from webhook)</p>"
         else:
             try:
                 print("Getting vehicle location...")
@@ -365,8 +365,16 @@ def vehicle():
         
         if latest_odometer_entry:
             odometer_data = latest_odometer_entry.to_dict()['data']
-            distance = odometer_data.get('distance', odometer_data.get('value', 'N/A'))
-            odometer_info = f"<p><strong>Odometer:</strong> {distance} km (from webhook)</p>"
+            # Handle both old and new data structures
+            if 'value' in odometer_data:
+                # New enhanced structure
+                odometer_value = odometer_data['value']
+                distance = odometer_value.get('value', 'N/A')
+                odometer_info = f"<p><strong>Odometer:</strong> {distance} km (from webhook)</p>"
+            else:
+                # Old structure
+                distance = odometer_data.get('distance', odometer_data.get('value', 'N/A'))
+                odometer_info = f"<p><strong>Odometer:</strong> {distance} km (from webhook)</p>"
         else:
             try:
                 print("Getting vehicle odometer...")
@@ -380,8 +388,7 @@ def vehicle():
                 print(f"Error getting odometer: {str(e)}")
                 odometer_info = "<p><strong>Odometer:</strong> Error retrieving odometer</p>"
         
-        # --- TractionBattery.StateOfCharge ---
-        # Get latest battery from database
+
         latest_battery_entry = WebhookData.query.filter_by(
             vehicle_id=db_vehicle.id,
             event_type='TractionBattery.StateOfCharge'
@@ -389,13 +396,20 @@ def vehicle():
         
         if latest_battery_entry:
             soc_data = latest_battery_entry.to_dict()['data']
-            soc_value = soc_data.get('percentage', soc_data.get('value', 'N/A'))
-            soc_info = f"<p><strong>State of Charge:</strong> {soc_value}% (from webhook)</p>"
+            # Handle both old and new data structures
+            if 'value' in soc_data:
+                # New enhanced structure
+                soc_value_data = soc_data['value']
+                soc_value = soc_value_data.get('value', 'N/A')
+                soc_info = f"<p><strong>State of Charge:</strong> {soc_value}% (from webhook)</p>"
+            else:
+                # Old structure
+                soc_value = soc_data.get('percentage', soc_data.get('value', 'N/A'))
+                soc_info = f"<p><strong>State of Charge:</strong> {soc_value}% (from webhook)</p>"
         else:
             soc_info = "<p><strong>State of Charge:</strong> N/A</p>"
         
-        # --- TractionBattery.NominalCapacity ---
-        # Get latest capacity from database
+
         latest_capacity_entry = WebhookData.query.filter_by(
             vehicle_id=db_vehicle.id,
             event_type='TractionBattery.NominalCapacity'
@@ -403,13 +417,19 @@ def vehicle():
         
         if latest_capacity_entry:
             capacity_data = latest_capacity_entry.to_dict()['data']
-            capacity_value = capacity_data.get('capacity', 'N/A')
-            capacity_info = f"<p><strong>Nominal Capacity:</strong> {capacity_value} kWh (from webhook)</p>"
+            # Handle both old and new data structures
+            if 'value' in capacity_data:
+                # New enhanced structure
+                capacity_value_data = capacity_data['value']
+                capacity_value = capacity_value_data.get('capacity', 'N/A')
+                capacity_info = f"<p><strong>Nominal Capacity:</strong> {capacity_value} kWh (from webhook)</p>"
+            else:
+                # Old structure
+                capacity_value = capacity_data.get('capacity', 'N/A')
+                capacity_info = f"<p><strong>Nominal Capacity:</strong> {capacity_value} kWh (from webhook)</p>"
         else:
             capacity_info = "<p><strong>Nominal Capacity:</strong> N/A</p>"
-        
-        # --- Charge.ChargeLimits or Charge.ChargeLimitConfiguration ---
-        # Get latest charge limits from database
+
         latest_charge_limits_entry = WebhookData.query.filter_by(
             vehicle_id=db_vehicle.id,
             event_type='Charge.ChargeLimits'
@@ -417,7 +437,15 @@ def vehicle():
         
         if latest_charge_limits_entry:
             charge_limits_data = latest_charge_limits_entry.to_dict()['data']
-            charge_limits_info = f"<p><strong>Charge Limits:</strong> {charge_limits_data} (from webhook)</p>"
+            # Handle both old and new data structures
+            if 'value' in charge_limits_data:
+                # New enhanced structure
+                charge_limits_value_data = charge_limits_data['value']
+                active_limit = charge_limits_value_data.get('values', {}).get('activeLimit', 'N/A')
+                charge_limits_info = f"<p><strong>Charge Limits:</strong> Active Limit: {active_limit}% (from webhook)</p>"
+            else:
+                # Old structure
+                charge_limits_info = f"<p><strong>Charge Limits:</strong> {charge_limits_data} (from webhook)</p>"
         else:
             charge_limits_info = "<p><strong>Charge Limits:</strong> N/A</p>"
         
@@ -512,49 +540,34 @@ def webhook():
         data = request.get_json()
         print(f"Received webhook data: {data}")
 
-        # Check for batch payload (VehicleState type) - old format
-        if data.get("type") == "VehicleState" and "data" in data and "vehicles" in data["data"]:
-            for vehicle in data["data"]["vehicles"]:
-                vehicle_id = vehicle.get("vehicleId")
-                signals = vehicle.get("signals", {})
-                
-                # Try to get user_id from the vehicle using helper function
-                user_id = get_user_id_from_vehicle(vehicle_id)
+        # Check for verification request first
+        if data.get('eventName') == 'verify':
+            return handle_verification(data)
 
-                # Location.PreciseLocation
-                loc = signals.get("location", {}).get("preciseLocation")
-                if loc:
-                    store_webhook_data(vehicle_id, "Location.PreciseLocation", loc, raw_data=data, user_id=user_id)
-
-                # Odometer.TraveledDistance
-                odo = signals.get("odometer", {}).get("traveledDistance")
-                if odo:
-                    store_webhook_data(vehicle_id, "Odometer.TraveledDistance", odo, raw_data=data, user_id=user_id)
-
-                # TractionBattery.StateOfCharge
-                soc = signals.get("tractionBattery", {}).get("stateOfCharge")
-                if soc:
-                    store_webhook_data(vehicle_id, "TractionBattery.StateOfCharge", soc, raw_data=data, user_id=user_id)
-
-                # TractionBattery.NominalCapacity
-                cap = signals.get("tractionBattery", {}).get("nominalCapacity")
-                if cap:
-                    store_webhook_data(vehicle_id, "TractionBattery.NominalCapacity", cap, raw_data=data, user_id=user_id)
-
-                # Charge.ChargeLimits or Charge.ChargeLimitConfiguration
-                charge_limits = signals.get("charge", {}).get("chargeLimits")
-                if charge_limits:
-                    store_webhook_data(vehicle_id, "Charge.ChargeLimits", charge_limits, raw_data=data, user_id=user_id)
-
-            return {'status': 'success', 'message': 'Batch payload processed'}, 200
-
-        # Check for new VEHICLE_STATE format with signals array
-        elif data.get("eventType") == "VEHICLE_STATE" and "data" in data and "signals" in data["data"]:
-            vehicle_id = data["data"]["vehicle"]["id"]
+        # Handle VEHICLE_STATE format with signals array
+        if data.get("eventType") == "VEHICLE_STATE" and "data" in data and "signals" in data["data"]:
+            # Extract event metadata
+            event_id = data.get("eventId")
+            webhook_id = data.get("meta", {}).get("webhookId")
+            delivery_id = data.get("meta", {}).get("deliveryId")
+            delivered_at = data.get("meta", {}).get("deliveredAt")
+            mode = data.get("meta", {}).get("mode")
+            signal_count = data.get("meta", {}).get("signalCount")
+            
+            # Extract user and vehicle info
+            user_info = data["data"].get("user", {})
+            user_id_from_webhook = user_info.get("id")
             vehicle_info = data["data"]["vehicle"]
+            vehicle_id = vehicle_info["id"]
             signals = data["data"]["signals"]
             
-            print(f"Processing VEHICLE_STATE payload for vehicle {vehicle_id}")
+            print(f"Processing VEHICLE_STATE payload:")
+            print(f"  Event ID: {event_id}")
+            print(f"  Webhook ID: {webhook_id}")
+            print(f"  User ID: {user_id_from_webhook}")
+            print(f"  Vehicle ID: {vehicle_id}")
+            print(f"  Signal Count: {signal_count}")
+            print(f"  Mode: {mode}")
             
             # Update vehicle info if it exists, or create placeholder
             vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
@@ -570,100 +583,66 @@ def webhook():
                 
                 # Get user_id from the vehicle using helper function
                 user_id = get_user_id_from_vehicle(vehicle_id)
+            else:
+                # Use user_id from webhook if available, otherwise default
+                user_id = user_id_from_webhook if user_id_from_webhook else 'default_user'
             
             for signal in signals:
                 signal_code = signal.get("code", "")
+                signal_name = signal.get("name", "")
+                signal_group = signal.get("group", "")
                 signal_body = signal.get("body", {})
+                signal_meta = signal.get("meta", {})
+                
+                # Extract timing information from signal metadata
+                oem_updated_at = signal_meta.get("oemUpdatedAt")
+                retrieved_at = signal_meta.get("retrievedAt")
+                
+                # Create enhanced data structure with metadata
+                enhanced_data = {
+                    "value": signal_body,
+                    "metadata": {
+                        "signal_name": signal_name,
+                        "signal_group": signal_group,
+                        "oem_updated_at": oem_updated_at,
+                        "retrieved_at": retrieved_at,
+                        "event_id": event_id,
+                        "webhook_id": webhook_id,
+                        "delivery_id": delivery_id,
+                        "delivered_at": delivered_at,
+                        "mode": mode
+                    }
+                }
                 
                 # Map signal codes to event types
                 if signal_code == "location-preciselocation":
-                    store_webhook_data(vehicle_id, "Location.PreciseLocation", signal_body, raw_data=data, user_id=user_id)
-                    print(f"Stored Location.PreciseLocation for vehicle {vehicle_id}")
+                    store_webhook_data(vehicle_id, "Location.PreciseLocation", enhanced_data, raw_data=data, user_id=user_id)
+                    print(f"Stored Location.PreciseLocation for vehicle {vehicle_id} (lat: {signal_body.get('latitude')}, lng: {signal_body.get('longitude')})")
                     
                 elif signal_code == "odometer-traveleddistance":
-                    store_webhook_data(vehicle_id, "Odometer.TraveledDistance", signal_body, raw_data=data, user_id=user_id)
-                    print(f"Stored Odometer.TraveledDistance for vehicle {vehicle_id}")
+                    store_webhook_data(vehicle_id, "Odometer.TraveledDistance", enhanced_data, raw_data=data, user_id=user_id)
+                    print(f"Stored Odometer.TraveledDistance for vehicle {vehicle_id} (value: {signal_body.get('value')})")
                     
                 elif signal_code == "tractionbattery-stateofcharge":
-                    store_webhook_data(vehicle_id, "TractionBattery.StateOfCharge", signal_body, raw_data=data, user_id=user_id)
-                    print(f"Stored TractionBattery.StateOfCharge for vehicle {vehicle_id}")
+                    store_webhook_data(vehicle_id, "TractionBattery.StateOfCharge", enhanced_data, raw_data=data, user_id=user_id)
+                    print(f"Stored TractionBattery.StateOfCharge for vehicle {vehicle_id} (value: {signal_body.get('value')}%)")
                     
                 elif signal_code == "tractionbattery-nominalcapacity":
-                    store_webhook_data(vehicle_id, "TractionBattery.NominalCapacity", signal_body, raw_data=data, user_id=user_id)
-                    print(f"Stored TractionBattery.NominalCapacity for vehicle {vehicle_id}")
+                    store_webhook_data(vehicle_id, "TractionBattery.NominalCapacity", enhanced_data, raw_data=data, user_id=user_id)
+                    print(f"Stored TractionBattery.NominalCapacity for vehicle {vehicle_id} (capacity: {signal_body.get('capacity')} kWh)")
                     
                 elif signal_code == "charge-chargelimits":
-                    store_webhook_data(vehicle_id, "Charge.ChargeLimits", signal_body, raw_data=data, user_id=user_id)
-                    print(f"Stored Charge.ChargeLimits for vehicle {vehicle_id}")
+                    store_webhook_data(vehicle_id, "Charge.ChargeLimits", enhanced_data, raw_data=data, user_id=user_id)
+                    active_limit = signal_body.get('values', {}).get('activeLimit')
+                    print(f"Stored Charge.ChargeLimits for vehicle {vehicle_id} (active limit: {active_limit}%)")
+                else:
+                    print(f"Unknown signal code: {signal_code} for vehicle {vehicle_id}")
             
             return {'status': 'success', 'message': 'VEHICLE_STATE payload processed'}, 200
-
-        # Fallback: handle as individual event (existing logic)
-        # Check if this is a verification request
-        if data.get('eventName') == 'verify':
-            return handle_verification(data)
         
-        # Store the webhook data with timestamp
-        vehicle_id = data.get('vehicleId')
-        event_type = data.get('eventType')
-        event_data = data.get('data', {})
-        
-        # Try to get user_id from the vehicle using helper function
-        user_id = get_user_id_from_vehicle(vehicle_id)
-        
-        # Store in database
-        store_webhook_data(vehicle_id, event_type, event_data, raw_data=data, user_id=user_id)
-        
-        print(f"Stored individual webhook data for vehicle {vehicle_id}, event {event_type}")
-        
-        # Log the webhook for debugging
-        print(f"Vehicle ID: {vehicle_id}")
-        print(f"Event Type: {event_type}")
-        
-        # Handle different event types
-        if event_type == 'vehicle.location':
-            location_data = data.get('data', {})
-            print(f"Location update: {location_data}")
-            
-        elif event_type == 'vehicle.odometer':
-            odometer_data = data.get('data', {})
-            print(f"Odometer update: {odometer_data}")
-            
-        elif event_type == 'vehicle.error':
-            error_data = data.get('data', {})
-            print(f"Vehicle error: {error_data}")
-            # Handle vehicle errors (connection issues, etc.)
-            
-        elif event_type == 'vehicle.disconnect':
-            print(f"Vehicle disconnected: {vehicle_id}")
-            # Handle vehicle disconnection
-            
-        # Handle specific data signals
-        elif event_type == 'Charge.ChargeLimits':
-            charge_limits = data.get('data', {})
-            print(f"Charge limits update: {charge_limits}")
-            
-        elif event_type == 'Location.PreciseLocation':
-            precise_location = data.get('data', {})
-            print(f"Precise location update: {precise_location}")
-            
-        elif event_type == 'Odometer.TraveledDistance':
-            traveled_distance = data.get('data', {})
-            print(f"Traveled distance update: {traveled_distance}")
-            
-        elif event_type == 'TractionBattery.StateOfCharge':
-            battery_soc = data.get('data', {})
-            print(f"Battery state of charge update: {battery_soc}")
-            
-        elif event_type == 'TractionBattery.NominalCapacity':
-            battery_capacity = data.get('data', {})
-            print(f"Battery nominal capacity update: {battery_capacity}")
-            
-        else:
-            print(f"Unknown event type: {event_type}")
-        
-        # Return success response
-        return {'status': 'success'}, 200
+        # If we reach here, the payload format is not supported
+        print(f"Unsupported webhook payload format: {data}")
+        return {'status': 'error', 'message': 'Unsupported webhook payload format'}, 400
         
     except Exception as e:
         print(f"Error processing webhook: {str(e)}")
@@ -819,7 +798,7 @@ def get_user_vehicle_location(user_id, vehicle_id):
         
         return jsonify({
             'user_id': user_id,
-            'vehicle_id': vehicle_id,
+        'vehicle_id': vehicle_id,
             'timestamp': latest_location_entry.timestamp,
             'location': latest_location_entry.to_dict()['data']
         })
