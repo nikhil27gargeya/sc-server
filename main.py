@@ -52,7 +52,11 @@ client = smartcar.AuthClient(
 def store_access_token(vehicle_id, access_token_data):
     try:
         from datetime import datetime, timezone
-        expiration = datetime.fromtimestamp(access_token_data['expiration'], tz=timezone.utc)
+        # Handle both timestamp and datetime objects
+        if isinstance(access_token_data['expiration'], (int, float)):
+            expiration = datetime.fromtimestamp(access_token_data['expiration'], tz=timezone.utc)
+        else:
+            expiration = access_token_data['expiration']
         
         print(f"Starting store_access_token for vehicle {vehicle_id}")
         
@@ -796,6 +800,22 @@ def clear_all_data():
     except Exception as e:
         db.session.rollback()
         return {'status': 'error', 'message': str(e)}, 500
+
+@app.route('/debug/database')
+def debug_database():
+    """Debug endpoint to see what's in the database"""
+    try:
+        users = User.query.all()
+        vehicles = Vehicle.query.all()
+        webhooks = WebhookData.query.all()
+        
+        return jsonify({
+            'users': [{'id': u.id, 'smartcar_user_id': u.smartcar_user_id, 'email': u.email} for u in users],
+            'vehicles': [{'id': v.id, 'smartcar_vehicle_id': v.smartcar_vehicle_id, 'user_id': v.user_id, 'make': v.make, 'model': v.model} for v in vehicles],
+            'webhooks': len(webhooks)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/clear-webhook-data', methods=['POST'])
 def clear_webhook_data():
