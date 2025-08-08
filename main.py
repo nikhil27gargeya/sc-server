@@ -665,6 +665,24 @@ def handle_verification(data):
 
 
 # api endpoints
+@app.route('/api/vehicle/<vehicle_id>/access-token')
+def get_vehicle_access_token(vehicle_id):
+    """Get access token for a specific vehicle"""
+    try:
+        vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
+        
+        if not vehicle:
+            return jsonify({'error': 'Vehicle not found'}), 404
+        
+        return jsonify({
+            'vehicle_id': vehicle_id,
+            'access_token': vehicle.access_token,
+            'token_expires_at': vehicle.token_expires_at.isoformat() if vehicle.token_expires_at else None
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/vehicle/<vehicle_id>/latest-signals')
 def get_vehicle_latest_signals(vehicle_id):
     """Get latest signals for a specific vehicle"""
