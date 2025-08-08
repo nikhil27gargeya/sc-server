@@ -49,7 +49,7 @@ client = smartcar.AuthClient(
 )
 
 #token management
-def store_access_token(vehicle_id, access_token_data, user_id):
+def store_access_token(vehicle_id, access_token_data):
     try:
         from datetime import datetime, timezone
         expiration = datetime.fromtimestamp(access_token_data['expiration'], tz=timezone.utc)
@@ -63,16 +63,16 @@ def store_access_token(vehicle_id, access_token_data, user_id):
             vehicle.token_expires_at = expiration
             vehicle.updated_at = datetime.utcnow()
         else:
-            # create new user if it's the first vehicle for this user_id
-            user = User.query.filter_by(smartcar_user_id=user_id).first()
-            # for test vehicle
+            # Create a default user if none exists
+            user = User.query.first()
             if not user:
                 user = User(
-                    smartcar_user_id=user_id,
-                    email=f'user_{user_id}@example.com'
+                    smartcar_user_id='default_user',
+                    email='default@example.com'
                 )
                 db.session.add(user)
-                db.session.flush()
+                db.session.commit()
+                print(f"Created default user with ID: {user.id}")
             
             # Create new vehicle
             vehicle = Vehicle(
@@ -83,16 +83,17 @@ def store_access_token(vehicle_id, access_token_data, user_id):
                 user_id=user.id
             )
             db.session.add(vehicle)
+            print(f"Created new vehicle {vehicle_id} with user_id {user.id}")
         
         db.session.commit()
-        print(f"Stored access token for vehicle {vehicle_id} for user {user_id}")
+        print(f"Successfully stored access token for vehicle {vehicle_id}")
         return True
     except Exception as e:
         print(f"Error storing access token: {str(e)}")
         db.session.rollback()
         return False
 
-def get_access_token(vehicle_id, user_id=None):
+def get_access_token(vehicle_id):
     try:
         vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
         if vehicle:
@@ -105,25 +106,17 @@ def get_access_token(vehicle_id, user_id=None):
                     'expiration': vehicle.token_expires_at.timestamp()
                 }
                 
-                return refresh_access_token_db(vehicle.refresh_token, vehicle_id, user_id)
+                return refresh_access_token_db(vehicle.refresh_token, vehicle_id)
         return None
     except Exception as e:
         print(f"Error getting access token: {str(e)}")
         return None
 
-def refresh_access_token_db(refresh_token, vehicle_id, user_id=None):
+def refresh_access_token_db(refresh_token, vehicle_id):
     try:
         new_token = client.refresh_token(refresh_token)
         if new_token:
-            if user_id is None:
-                vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
-                if vehicle:
-                    user = User.query.get(vehicle.user_id)
-                    user_id = user.app_user_id if user else 'default_user'
-                else:
-                    user_id = 'default_user'
-            
-                    store_access_token(vehicle_id, new_token, user_id)
+            store_access_token(vehicle_id, new_token)
         return new_token
     except Exception as e:
         print(f"Error refreshing token in database: {str(e)}")
@@ -139,7 +132,7 @@ def get_user_id_from_vehicle(vehicle_id):
 
 
 # store webhook data
-def store_webhook_data(vehicle_id, event_type, data, raw_data=None, timestamp=None, user_id=None):
+def store_webhook_data(vehicle_id, event_type, data, raw_data=None, timestamp=None):
     try:
         if timestamp is None:
             timestamp = datetime.now()
@@ -148,20 +141,17 @@ def store_webhook_data(vehicle_id, event_type, data, raw_data=None, timestamp=No
         if not vehicle:
             print(f"Vehicle {vehicle_id} not found in database, creating placeholder vehicle")
 
-            if user_id is None:
-                user_id = 'default_user'
-            
             store_access_token(vehicle_id, {
                 'access_token': 'placeholder', 
                 'refresh_token': 'placeholder', 
                 'expiration': datetime.now().timestamp()
-            }, user_id)
+            })
             
             vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
             if not vehicle:
                 print(f"Could not find vehicle {vehicle_id} after attempting to create placeholder")
                 return False
-            print(f"Created placeholder vehicle {vehicle_id} for user {user_id}")
+            print(f"Created placeholder vehicle {vehicle_id}")
         
         webhook_entry = WebhookData(
             vehicle_id=vehicle.id,
@@ -624,23 +614,23 @@ def webhook():
                 
                 # Map signal codes to event types
                 if signal_code == "location-preciselocation":
-                    store_webhook_data(vehicle_id, "Location.PreciseLocation", enhanced_data, raw_data=data, user_id=user_id)
+                    store_webhook_data(vehicle_id, "Location.PreciseLocation", enhanced_data, raw_data=data)
                     print(f"Stored Location.PreciseLocation for vehicle {vehicle_id} (lat: {signal_body.get('latitude')}, lng: {signal_body.get('longitude')})")
                     
                 elif signal_code == "odometer-traveleddistance":
-                    store_webhook_data(vehicle_id, "Odometer.TraveledDistance", enhanced_data, raw_data=data, user_id=user_id)
+                    store_webhook_data(vehicle_id, "Odometer.TraveledDistance", enhanced_data, raw_data=data)
                     print(f"Stored Odometer.TraveledDistance for vehicle {vehicle_id} (value: {signal_body.get('value')})")
                     
                 elif signal_code == "tractionbattery-stateofcharge":
-                    store_webhook_data(vehicle_id, "TractionBattery.StateOfCharge", enhanced_data, raw_data=data, user_id=user_id)
+                    store_webhook_data(vehicle_id, "TractionBattery.StateOfCharge", enhanced_data, raw_data=data)
                     print(f"Stored TractionBattery.StateOfCharge for vehicle {vehicle_id} (value: {signal_body.get('value')}%)")
                     
                 elif signal_code == "tractionbattery-nominalcapacity":
-                    store_webhook_data(vehicle_id, "TractionBattery.NominalCapacity", enhanced_data, raw_data=data, user_id=user_id)
+                    store_webhook_data(vehicle_id, "TractionBattery.NominalCapacity", enhanced_data, raw_data=data)
                     print(f"Stored TractionBattery.NominalCapacity for vehicle {vehicle_id} (capacity: {signal_body.get('capacity')} kWh)")
                     
                 elif signal_code == "charge-chargelimits":
-                    store_webhook_data(vehicle_id, "Charge.ChargeLimits", enhanced_data, raw_data=data, user_id=user_id)
+                    store_webhook_data(vehicle_id, "Charge.ChargeLimits", enhanced_data, raw_data=data)
                     active_limit = signal_body.get('values', {}).get('activeLimit')
                     print(f"Stored Charge.ChargeLimits for vehicle {vehicle_id} (active limit: {active_limit}%)")
                 else:
