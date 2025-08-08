@@ -178,11 +178,7 @@ def index():
     <h2>Smartcar Server</h2>
     <div class="form-section">
         <h3>Connect Vehicle</h3>
-        <form action="/login" method="get">
-            <label for="user_id">User ID:</label>
-            <input type="text" id="user_id" name="user_id" placeholder="Enter your user ID" required>
-            <button type="submit" class="btn">Connect Vehicle</button>
-        </form>
+        <a href="/login" class="btn">Connect Vehicle</a>
     </div>
     
     <div class="form-section">
@@ -207,32 +203,17 @@ def index():
 
 @app.route('/login')
 def login():
-    user_id = request.args.get('user_id')
-    
-    if not user_id:
-        return jsonify({'error': 'user_id parameter is required'}), 400
-    
-    # Store user_id in session for the exchange step
-    session['pending_user_id'] = user_id
-    
-    # Generate auth URL with state parameter to include user_id
-    auth_url = client.get_auth_url(state=user_id)
+    # Generate auth URL without requiring user_id
+    auth_url = client.get_auth_url()
     return redirect(auth_url)
 
 
 @app.route('/exchange')
 def exchange():
     code = request.args.get('code')
-    state = request.args.get('state')  # This will contain the user_id
     
     if not code:
         content = '<div class="error">authorization code not found in request</div>'
-        return render_template('base.html', content=content)
-    
-    # Get user_id from state parameter (sent by iOS app)
-    user_id = state
-    if not user_id:
-        content = '<div class="error">User ID not found in state parameter</div>'
         return render_template('base.html', content=content)
     
     try:
@@ -251,7 +232,7 @@ def exchange():
                 vehicle = smartcar.Vehicle(vehicle_id, access_token['access_token'])
                 vehicle_info = vehicle.info()
                 
-                store_access_token(vehicle_id, access_token, user_id)
+                store_access_token(vehicle_id, access_token)
                 
                 db_vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
                 if db_vehicle:
@@ -275,7 +256,6 @@ def exchange():
         return jsonify({
             'status': 'success',
             'message': 'Vehicle connected successfully',
-            'user_id': user_id,
             'vehicle_id': vehicle_id if 'vehicle_id' in locals() else None
         })
     
