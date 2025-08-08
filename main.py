@@ -794,6 +794,36 @@ def migrate_database():
         db.session.rollback()
         return {'status': 'error', 'message': str(e)}, 500
 
+@app.route('/clear-all-data', methods=['POST'])
+def clear_all_data():
+    """Clear all data from database (users, vehicles, webhooks, sessions)"""
+    try:
+        # clear all webhook data
+        webhook_count = WebhookData.query.count()
+        WebhookData.query.delete()
+        
+        # clear all vehicles
+        vehicle_count = Vehicle.query.count()
+        Vehicle.query.delete()
+        
+        # clear all users
+        user_count = User.query.count()
+        User.query.delete()
+        
+        # clear all sessions
+        session_count = UserSession.query.count()
+        UserSession.query.delete()
+        
+        db.session.commit()
+        
+        return {
+            'status': 'success', 
+            'message': f'All data cleared: {user_count} users, {vehicle_count} vehicles, {webhook_count} webhooks, {session_count} sessions'
+        }, 200
+    except Exception as e:
+        db.session.rollback()
+        return {'status': 'error', 'message': str(e)}, 500
+
 @app.route('/clear-webhook-data', methods=['POST'])
 def clear_webhook_data():
     try:
