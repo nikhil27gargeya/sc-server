@@ -751,6 +751,49 @@ def get_user_vehicle_latest_signals(user_id, vehicle_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/migrate-db', methods=['POST'])
+def migrate_database():
+    """Migrate database schema (add app_user_id column if missing)"""
+    try:
+        from sqlalchemy import text
+        
+        # Ensure app_user_id column exists on users
+        result = db.session.execute(text("""
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'users' AND column_name = 'app_user_id'
+        """))
+        exists = result.scalar() is not None
+        
+        if not exists:
+            print("Adding app_user_id column to users table...")
+            db.session.execute(text("ALTER TABLE users ADD COLUMN app_user_id VARCHAR(255)"))
+            # Optional unique index for app_user_id
+            try:
+                db.session.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_app_user_id ON users(app_user_id)"))
+            except Exception:
+                pass
+            db.session.commit()
+            print("app_user_id column added.")
+            
+            # Backfill app_user_id if missing by copying existing smartcar_user_id
+            users = User.query.all()
+            updated = 0
+            for u in users:
+                if not getattr(u, 'app_user_id', None) and getattr(u, 'smartcar_user_id', None):
+                    u.app_user_id = u.smartcar_user_id
+                    updated += 1
+            if updated:
+                db.session.commit()
+                print(f"Backfilled app_user_id for {updated} existing users")
+            
+            return {'status': 'success', 'message': f'app_user_id column added and {updated} users backfilled'}, 200
+        else:
+            return {'status': 'success', 'message': 'app_user_id column already exists'}, 200
+            
+    except Exception as e:
+        db.session.rollback()
+        return {'status': 'error', 'message': str(e)}, 500
+
 @app.route('/clear-webhook-data', methods=['POST'])
 def clear_webhook_data():
     try:
