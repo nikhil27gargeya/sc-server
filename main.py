@@ -120,7 +120,8 @@ def get_access_token(vehicle_id):
                     'refresh_token': vehicle.refresh_token,
                     'expiration': vehicle.token_expires_at.timestamp()
                 }
-                
+            else:
+                # Token expired, try to refresh
                 return refresh_access_token_db(vehicle.refresh_token, vehicle_id)
         return None
     except Exception as e:
