@@ -219,10 +219,10 @@ def exchange():
     try:
         access_token = client.exchange_code(code)
         
-        print(f"Received access token for user {user_id}: {access_token}")
+        print(f"Received access token: {access_token}")
         
         # Store in database only - no session storage
-        print(f"Storing token in database for user {user_id}")
+        print(f"Storing token in database")
         
         try:
             vehicle_ids = smartcar.get_vehicle_ids(access_token['access_token'])
@@ -244,14 +244,13 @@ def exchange():
                 else:
                     print(f"Warning: Vehicle {vehicle_id} not found in database after storing token")
             else:
-                print(f"Warning: No vehicles found for user {user_id}")
+                print(f"Warning: No vehicles found")
                 vehicle_id = None
         except Exception as e:
             print(f"Error storing vehicle info in database: {str(e)}")
             vehicle_id = None
         
-        # persist current user id in session for UX
-        session['current_user_id'] = user_id
+        # No user_id to persist
 
         return jsonify({
             'status': 'success',
