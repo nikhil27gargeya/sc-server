@@ -64,11 +64,11 @@ def store_access_token(vehicle_id, access_token_data, user_id):
             vehicle.updated_at = datetime.utcnow()
         else:
             # create new user if it's the first vehicle for this user_id
-            user = User.query.filter_by(app_user_id=user_id).first()
+            user = User.query.filter_by(smartcar_user_id=user_id).first()
             # for test vehicle
             if not user:
                 user = User(
-                    app_user_id=user_id,
+                    smartcar_user_id=user_id,
                     email=f'user_{user_id}@example.com'
                 )
                 db.session.add(user)
@@ -134,7 +134,7 @@ def get_user_id_from_vehicle(vehicle_id):
     vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
     if vehicle:
         user = User.query.get(vehicle.user_id)
-        return user.app_user_id if user else None
+        return user.smartcar_user_id if user else None
     return None
 
 
@@ -314,7 +314,7 @@ def vehicle():
             return render_template('base.html', content=content)
         
         # Find user and their vehicles
-        user = User.query.filter_by(app_user_id=user_id).first()
+        user = User.query.filter_by(smartcar_user_id=user_id).first()
         if not user:
             content = f'''
             <div class="error">
