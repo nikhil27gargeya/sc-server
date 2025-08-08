@@ -54,18 +54,24 @@ def store_access_token(vehicle_id, access_token_data):
         from datetime import datetime, timezone
         expiration = datetime.fromtimestamp(access_token_data['expiration'], tz=timezone.utc)
         
+        print(f"Starting store_access_token for vehicle {vehicle_id}")
+        
         # Check if vehicle exists
         vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
         
         if vehicle:
+            print(f"Found existing vehicle {vehicle_id}, updating tokens")
             vehicle.access_token = access_token_data['access_token']
             vehicle.refresh_token = access_token_data['refresh_token']
             vehicle.token_expires_at = expiration
             vehicle.updated_at = datetime.utcnow()
         else:
+            print(f"Vehicle {vehicle_id} not found, creating new vehicle")
+            
             # Create a default user if none exists
             user = User.query.first()
             if not user:
+                print("No users found, creating default user")
                 user = User(
                     smartcar_user_id='default_user',
                     email='default@example.com'
@@ -73,6 +79,8 @@ def store_access_token(vehicle_id, access_token_data):
                 db.session.add(user)
                 db.session.commit()
                 print(f"Created default user with ID: {user.id}")
+            else:
+                print(f"Using existing user with ID: {user.id}")
             
             # Create new vehicle
             vehicle = Vehicle(
@@ -85,11 +93,14 @@ def store_access_token(vehicle_id, access_token_data):
             db.session.add(vehicle)
             print(f"Created new vehicle {vehicle_id} with user_id {user.id}")
         
+        print("Committing to database...")
         db.session.commit()
         print(f"Successfully stored access token for vehicle {vehicle_id}")
         return True
     except Exception as e:
         print(f"Error storing access token: {str(e)}")
+        import traceback
+        traceback.print_exc()
         db.session.rollback()
         return False
 
@@ -255,7 +266,8 @@ def exchange():
         return jsonify({
             'status': 'success',
             'message': 'Vehicle connected successfully',
-            'vehicle_id': vehicle_id if 'vehicle_id' in locals() else None
+            'vehicle_id': vehicle_id if 'vehicle_id' in locals() else None,
+            'access_token': access_token['access_token'] if 'access_token' in locals() else None
         })
     
     except Exception as e:
