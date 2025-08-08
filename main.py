@@ -114,7 +114,16 @@ def get_access_token(vehicle_id):
         if vehicle:
             from datetime import datetime, timezone
             # Check if token_expires_at is not None before comparison
-            if vehicle.token_expires_at and vehicle.token_expires_at > datetime.now(timezone.utc):
+            # Make sure both datetimes are timezone-aware for comparison
+            current_time = datetime.now(timezone.utc)
+            if vehicle.token_expires_at:
+                # If token_expires_at is timezone-naive, assume it's UTC
+                if vehicle.token_expires_at.tzinfo is None:
+                    token_expires_utc = vehicle.token_expires_at.replace(tzinfo=timezone.utc)
+                else:
+                    token_expires_utc = vehicle.token_expires_at
+                
+                if token_expires_utc > current_time:
                 return {
                     'access_token': vehicle.access_token,
                     'refresh_token': vehicle.refresh_token,
@@ -299,9 +308,11 @@ def vehicle():
             return render_template('base.html', content=content)
         
         # Find vehicle directly by vehicle_id
+        print(f"Looking for vehicle with ID: {vehicle_id}")
         db_vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
         
         if not db_vehicle:
+            print(f"Vehicle {vehicle_id} not found in database")
             content = f'''
             <div class="error">
                 <h3>Vehicle Not Found</h3>
@@ -310,6 +321,8 @@ def vehicle():
             </div>
             '''
             return render_template('base.html', content=content)
+        
+        print(f"Found vehicle in database: {db_vehicle.smartcar_vehicle_id}")
         
         print(f"Found vehicle: {vehicle_id} ({db_vehicle.make} {db_vehicle.model} {db_vehicle.year})")
         
@@ -322,6 +335,7 @@ def vehicle():
             print(f"No valid access token found for vehicle {vehicle_id}")
         
         if not access_token:
+            print(f"No access token available for vehicle {vehicle_id}")
             content = '''
             <div class="error">
                 <h3>No Vehicle Connected</h3>
