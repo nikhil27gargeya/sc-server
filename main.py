@@ -124,11 +124,11 @@ def get_access_token(vehicle_id):
                     token_expires_utc = vehicle.token_expires_at
                 
                 if token_expires_utc > current_time:
-                return {
-                    'access_token': vehicle.access_token,
-                    'refresh_token': vehicle.refresh_token,
-                    'expiration': vehicle.token_expires_at.timestamp()
-                }
+                    return {
+                        'access_token': vehicle.access_token,
+                        'refresh_token': vehicle.refresh_token,
+                        'expiration': vehicle.token_expires_at.timestamp()
+                    }
             else:
                 # Token expired, try to refresh
                 return refresh_access_token_db(vehicle.refresh_token, vehicle_id)
