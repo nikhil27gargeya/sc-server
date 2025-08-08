@@ -198,19 +198,18 @@ def index():
     <div class="form-section">
         <h3>View Vehicle Info</h3>
         <form action="/vehicle" method="get">
-            <label for="vehicle_user_id">User ID:</label>
-            <input type="text" id="vehicle_user_id" name="user_id" placeholder="Enter your user ID" required>
+            <label for="vehicle_id">Vehicle ID:</label>
+            <input type="text" id="vehicle_id" name="vehicle_id" placeholder="Enter vehicle ID" required>
             <button type="submit" class="btn">View Vehicle</button>
         </form>
     </div>
     
     <div class="info-section">
         <h3>Quick Links</h3>
-        <p><strong>Example User IDs:</strong></p>
+        <p><strong>Example Vehicle IDs:</strong></p>
         <ul>
-            <li><code>default_user</code> - Default test user</li>
-            <li><code>test_user</code> - Test user</li>
-            <li><code>683b051c-e043-46e3-9b52-0056b7ba3428</code> - Your real vehicle user</li>
+            <li><code>31581c01-3f29-4906-a194-9c150d456ea8</code> - Tesla Model 3</li>
+            <li><code>6ccdc0d5-dee8-4d61-b23d-59122081da7a</code> - Your connected vehicle</li>
         </ul>
     </div>
     """
@@ -299,53 +298,36 @@ def exchange():
 @app.route('/vehicle')
 def vehicle():
     try:
-        # Get user_id from query parameter or session
-        user_id = request.args.get('user_id') or session.get('current_user_id')
+        # Get vehicle_id from query parameter
+        vehicle_id = request.args.get('vehicle_id')
         
-        if not user_id:
+        if not vehicle_id:
             content = '''
             <div class="error">
-                <h3>User ID Required</h3>
-                <p>Please provide a user_id parameter to view vehicles.</p>
-                <p>Example: <code>/vehicle?user_id=your_user_id</code></p>
+                <h3>Vehicle ID Required</h3>
+                <p>Please provide a vehicle_id parameter to view vehicle data.</p>
+                <p>Example: <code>/vehicle?vehicle_id=your_vehicle_id</code></p>
                 <a href="/" class="btn">Back to Home</a>
             </div>
             '''
             return render_template('base.html', content=content)
         
-        # Find user and their vehicles
-        user = User.query.filter_by(smartcar_user_id=user_id).first()
-        if not user:
+        # Find vehicle directly by vehicle_id
+        db_vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
+        
+        if not db_vehicle:
             content = f'''
             <div class="error">
-                <h3>User Not Found</h3>
-                <p>User ID "{user_id}" not found in database.</p>
+                <h3>Vehicle Not Found</h3>
+                <p>Vehicle ID "{vehicle_id}" not found in database.</p>
                 <a href="/" class="btn">Back to Home</a>
             </div>
             '''
             return render_template('base.html', content=content)
         
-        # Get all vehicles for this user
-        db_vehicles = Vehicle.query.filter_by(user_id=user.id).all()
+        print(f"Found vehicle: {vehicle_id} ({db_vehicle.make} {db_vehicle.model} {db_vehicle.year})")
         
-        if not db_vehicles:
-            content = f'''
-            <div class="error">
-                <h3>No Vehicles Found</h3>
-                <p>No vehicles found for user "{user_id}".</p>
-                <a href="/login?user_id={user_id}" class="btn">Connect Vehicle</a>
-            </div>
-            '''
-            return render_template('base.html', content=content)
-        
-        # For now, use the first vehicle. In a real app, you'd want to select specific vehicle
-        db_vehicle = db_vehicles[0]
-        vehicle_id = db_vehicle.smartcar_vehicle_id
-        
-        print(f"Found {len(db_vehicles)} vehicle(s) for user {user_id}")
-        print(f"Using vehicle: {vehicle_id} ({db_vehicle.make} {db_vehicle.model} {db_vehicle.year})")
-        
-        token_data = get_access_token(vehicle_id, user_id)
+        token_data = get_access_token(vehicle_id)
         access_token = None
         if token_data:
             access_token = token_data['access_token']
@@ -702,21 +684,14 @@ def handle_verification(data):
 
 
 # api endpoints
-@app.route('/api/user/<user_id>/vehicle/<vehicle_id>/latest-signals')
-def get_user_vehicle_latest_signals(user_id, vehicle_id):
-    """Get latest signals for a specific user's vehicle"""
+@app.route('/api/vehicle/<vehicle_id>/latest-signals')
+def get_vehicle_latest_signals(vehicle_id):
+    """Get latest signals for a specific vehicle"""
     try:
-        user = User.query.filter_by(app_user_id=user_id).first()
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
-        
-        vehicle = Vehicle.query.filter_by(
-            smartcar_vehicle_id=vehicle_id,
-            user_id=user.id
-        ).first()
+        vehicle = Vehicle.query.filter_by(smartcar_vehicle_id=vehicle_id).first()
         
         if not vehicle:
-            return jsonify({'error': 'Vehicle not found for this user'}), 404
+            return jsonify({'error': 'Vehicle not found'}), 404
         
         event_types = [
             'Location.PreciseLocation',
@@ -743,7 +718,6 @@ def get_user_vehicle_latest_signals(user_id, vehicle_id):
                 latest_signals[event_type] = None
 
         return jsonify({
-            'user_id': user_id,
             'vehicle_id': vehicle_id,
             'signals': latest_signals
         })
